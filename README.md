@@ -17,12 +17,18 @@ Open http://localhost:3000. For the production static demo, run `npm run build` 
 
 - **WASD / arrows:** steer left/right and climb/descend.
 - **Shift:** boost to 340 km/h. **Space:** brake toward 100 km/h.
+- **Mouse / I, J, K, L:** aim the throw. I/K raise/lower the angle; J/L aim left/right.
+- **Hold and release E / left mouse button:** charge and throw a package.
 - **P / Escape:** pause and resume.
-- On touchscreens, hold the on-screen directional and speed controls.
+- On touchscreens, use the directional and speed controls, drag the aiming pad, and hold/release the throw button.
 
 The sleigh launches at 180 km/h and accelerates smoothly to a 230 km/h cruise. The 18 km journey takes about 4 minutes 42 seconds at cruise or 3 minutes 11 seconds with sustained boost. Steering and climb rates are tuned for the faster pace. The sleigh banks into turns, pitches during climbs/descents, and settles with damped body motion; passengers brace while keeping their gaze forward.
 
-Collect 60 stars along six route waypoints. Stay above the ground and inside the valley; the sleigh has three lives. Flight ends on arrival or when all lives are lost. Sound is opt-in and generated locally with Web Audio. Leaving the browser tab automatically pauses the flight. The calm-movement setting reduces these body movements to a quarter of their usual amplitude.
+Deliver packages to the 154 marked houses along six route waypoints. Gold gift markers show houses awaiting a delivery; successful deliveries turn them green. Each house can earn up to 1,000 points: a roof hit scores full points, and landings farther from its footprint score progressively less, down to zero at 30 metres. A landing within 10 metres counts as delivered. Only an improvement to a house's best score adds points, so repeated throws cannot farm the same landing.
+
+The dotted arc and landing marker predict the current throw. Packages inherit the sleigh's forward, sideways and vertical velocity, then follow gravity, wind and air drag. Braking gives more time to aim; fast flybys carry packages farther and shorten the delivery window. Hold the throw control longer for more power. Cargo is unlimited, with a short cooldown and a bounded number of airborne packages. A 250-metre approach gives time to aim at the first houses.
+
+Stay above the ground and inside the valley; the sleigh has three lives. Flight ends on arrival or when all lives are lost, then waits for airborne packages to settle before showing the final score. Sound is opt-in and generated locally with Web Audio. Leaving the browser tab automatically pauses the flight. The calm-movement setting reduces these body movements to a quarter of their usual amplitude.
 
 ## Weather and daylight
 
@@ -45,13 +51,17 @@ npm test
 npm run build
 ```
 
-The 54 tests cover forward-facing passengers, damped banking/pitching, motion settling/pause/reset, rear-camera alignment at takeoff and during steering, 3D transforms, projection, surface normals, articulated animation, animation pause/speed transitions, and simulation lifecycle, frame timing, star collection/misses, collision protection, crash, arrival, bounded controls, sustained flight speeds and duration, and acceleration/braking. Browser verification should include desktop/mobile rendering, visible articulated reindeer motion, steering, pause/resume, modal keyboard focus, route display, and settings.
+The tests cover aiming and charging, inherited throw velocity, package trajectories and collisions, proximity scoring and repeated-house improvements, shared house placement, and the existing camera, model, motion, environment and flight behavior. Browser verification should include desktop/mobile aiming and throwing, visible trajectories and delivery feedback, speed-dependent landing changes, pause/resume, final airborne deliveries, modal keyboard focus, route display, and settings.
 
 ## Implementation
 
 - `src/components/sleigh/SleighSimulator.tsx`: client UI, input, focus management, and animation lifecycle.
 - `flight.ts`: deterministic immutable simulation and shared speed constants, independent of React and rendering.
-- `route.ts`: 18 km distance, 60 gates, waypoints and shared terrain period.
+- `route.ts`: 18 km distance, launch approach, waypoints and shared terrain period.
+- `houses.ts`: shared cottage placements and continuous delivery targets used by rendering and physics.
+- `aim.ts`: pointer/keyboard aiming, charging and carrier velocity at release.
+- `delivery.ts`: package physics, trajectory prediction, house collisions and proximity scoring.
+- `package-models.ts`: wrapped parcels, house gift markers and landing markers.
 - `environment.ts`: deterministic weather/daylight/aurora state from elapsed flight time.
 - `journey-space.ts`: bounded GPU coordinates and neighboring tile selection.
 - `geometry.ts`: 3D geometry and matrix helpers.

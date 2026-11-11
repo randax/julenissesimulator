@@ -14,11 +14,13 @@ import {
   startFlight,
   stepFlight,
   ROUTE_LENGTH,
-  STAR_GATES,
   type FlightInput,
   type FlightState,
 } from "./flight";
 import { SleighScene } from "./scene";
+import { createDelivery, predictThrow, stepDelivery, throwPackage, type ThrowPrediction } from "./delivery";
+import { chargePower, createAim, keyboardAim, makeThrowSource, pointerAim } from "./aim";
+import { DELIVERY_TARGET_COUNT } from "./houses";
 import { getEnvironment, type TimeMode, type WeatherMode } from "./environment";
 import { ROUTE_STOPS, routeStopAt } from "./route";
 import { SleighAudio } from "./audio";
@@ -28,8 +30,10 @@ import "./sleigh.css";
 export interface SleighSimulatorProps {
   /** Called once for each finished flight. */
   onComplete?: (result: {
-    stars: number;
-    totalStars: number;
+    points: number;
+    deliveredHouses: number;
+    totalHouses: number;
+    packagesThrown: number;
     elapsed: number;
     arrived: boolean;
   }) => void;
@@ -110,6 +114,14 @@ export default function SleighSimulator({
       weatherMode: "auto" as WeatherMode,
     });
   const callbackRef = useRef(onComplete);
+  const deliveryRef = useRef(createDelivery());
+  const aimRef = useRef(createAim());
+  const predictionRef = useRef<ThrowPrediction | null>(null);
+  const chargeRef = useRef<{ started: number; pointerId?: number } | null>(null);
+  const throwQueueRef = useRef<number | null>(null);
+  const completionReported = useRef(false);
+  const [delivery, setDelivery] = useState(createDelivery);
+  const [aimView, setAimView] = useState({ prediction: null as ThrowPrediction | null, charge: 0 });
   const [flight, setFlight] = useState(createFlight),
     [sound, setSound] = useState(false),
     [dialog, setDialog] = useState<Dialog>(null);
@@ -128,6 +140,7 @@ export default function SleighSimulator({
   const [fullscreen, setFullscreen] = useState(false),
     [audioError, setAudioError] = useState(false);
   const [sceneError, setSceneError] = useState("");
+  const showResults = flight.phase === "complete" && !delivery.packages.some((parcel) => !parcel.landed);
   const phase = flight.phase,
     ready = phase === "ready",
     flying = phase === "flying";
@@ -144,6 +157,28 @@ export default function SleighSimulator({
   const clearInput = useCallback(() => {
     keys.current.clear();
     touch.current = { ...neutral };
+    chargeRef.current = null;
+    throwQueueRef.current = null;
+  }, []);
+  const resetDeliveries = useCallback(() => {
+    deliveryRef.current = createDelivery();
+    aimRef.current = createAim();
+    predictionRef.current = null;
+    completionReported.current = false;
+    setDelivery(deliveryRef.current);
+    setAimView({ prediction: null, charge: 0 });
+    setNotice("");
+  }, []);
+  const beginThrow = useCallback((pointerId?: number) => {
+    if (stateRef.current.phase !== "flying" || chargeRef.current || deliveryRef.current.cooldown > 0) return;
+    chargeRef.current = { started: stateRef.current.elapsed, pointerId };
+  }, []);
+  const releaseThrow = useCallback((pointerId?: number) => {
+    const charge = chargeRef.current;
+    if (!charge || charge.pointerId !== pointerId) return;
+    chargeRef.current = null;
+    if (stateRef.current.phase === "flying")
+      throwQueueRef.current = chargePower(stateRef.current.elapsed - charge.started);
   }, []);
   const pause = useCallback(() => {
     clearInput();
@@ -157,13 +192,15 @@ export default function SleighSimulator({
     clearInput();
     setMap(false);
     setDialog(null);
+    resetDeliveries();
     commit(startFlight(createFlight()));
-  }, [commit, clearInput]);
+  }, [commit, clearInput, resetDeliveries]);
   const reset = useCallback(() => {
     clearInput();
     setDialog(null);
+    resetDeliveries();
     commit(createFlight());
-  }, [commit, clearInput]);
+  }, [commit, clearInput, resetDeliveries]);
   const openDialog = (value: Dialog) => {
     if (stateRef.current.phase === "flying") pause();
     setDialog(value);
@@ -228,7 +265,8 @@ export default function SleighSimulator({
     let frame = 0,
       last = 0,
       lastUI = 0,
-      sceneTime = 0;
+      sceneTime = 0,
+      lastPrediction = 0;
     const tick = (now: number) => {
       const dt = last ? Math.min((now - last) / 1000, 0.1) : 0;
       last = now;
@@ -259,33 +297,62 @@ export default function SleighSimulator({
       };
       const next = stepFlight(state, input, dt);
       stateRef.current = next;
-      if (next.stars > state.stars) {
-        soundRef.current?.bell();
-        setNotice("En stjerne til på reisen!");
+      const environment = getEnvironment(next.elapsed, optionsRef.current);
+      const wind = { x: environment.windX, z: environment.windZ };
+      const previousDelivery = deliveryRef.current;
+      const inFlight = previousDelivery.packages.some((parcel) => !parcel.landed);
+      if (next.phase === "flying" || (next.phase === "complete" && inFlight)) {
+        deliveryRef.current = stepDelivery(previousDelivery, wind, dt);
+      }
+      if (next.phase === "flying") {
+        aimRef.current = keyboardAim(aimRef.current,
+          Number(k.has("l")) - Number(k.has("j")),
+          Number(k.has("i")) - Number(k.has("k")), dt);
+        if (throwQueueRef.current !== null) {
+          deliveryRef.current = throwPackage(deliveryRef.current, makeThrowSource(next, state, dt),
+            { ...aimRef.current, power: throwQueueRef.current });
+          throwQueueRef.current = null;
+        }
+      }
+      const charge = chargeRef.current
+        ? Math.min(1, Math.max(0, (next.elapsed - chargeRef.current.started) / 0.85)) : 0;
+      const activeAim = { ...aimRef.current, power: 36 + charge * 22 };
+      if (next.phase === "flying" && now - lastPrediction >= 50) {
+        predictionRef.current = predictThrow(makeThrowSource(next, state, dt), activeAim, wind);
+        lastPrediction = now;
+      } else if (next.phase !== "flying") predictionRef.current = null;
+      const landing = deliveryRef.current.lastLanding;
+      if (landing && landing.packageId !== previousDelivery.lastLanding?.packageId) {
+        if (landing.awarded > 0) soundRef.current?.bell();
+        setNotice(landing.awarded > 0
+          ? `+${landing.awarded} poeng · ${landing.distance === 0 ? "Rett på huset!" : `${landing.distance?.toFixed(1).replace(".", ",")} m fra huset`}`
+          : landing.points > 0 ? "Huset har allerede fått et bedre kast. Prøv et nytt hus!" : "Pakken landet for langt unna. Prøv å bremse og sikt igjen.");
       }
       if (next.lives < state.lives) {
-        setNotice(
-          next.altitude <= 26
-            ? "Litt høyere! Pass på tretoppene."
-            : "Hold deg inne i dalen!",
-        );
+        setNotice(next.altitude <= 26 ? "Litt høyere! Pass på tretoppene." : "Hold deg inne i dalen!");
       }
-      if (next.phase === "complete" && state.phase !== "complete")
+      const settling = deliveryRef.current.packages.some((parcel) => !parcel.landed);
+      if (next.phase === "complete" && !settling && !completionReported.current) {
+        completionReported.current = true;
         callbackRef.current?.({
-          stars: next.stars,
-          totalStars: STAR_GATES.length,
+          points: deliveryRef.current.score,
+          deliveredHouses: deliveryRef.current.deliveries,
+          totalHouses: DELIVERY_TARGET_COUNT,
+          packagesThrown: deliveryRef.current.thrown,
           elapsed: next.elapsed,
           arrived: next.outcome === "arrived",
         });
-      if (state.phase !== "paused" && state.phase !== "complete")
-        sceneTime += dt;
-      scene.draw(next, sceneTime, optionsRef.current);
-      soundRef.current?.setWeather(
-        getEnvironment(next.elapsed, optionsRef.current).windX,
-      );
+      }
+      if (state.phase !== "paused" && (state.phase !== "complete" || settling)) sceneTime += dt;
+      scene.draw(next, sceneTime, optionsRef.current, {
+        delivery: deliveryRef.current, prediction: predictionRef.current, aim: activeAim, charge,
+      });
+      soundRef.current?.setWeather(environment.windX);
       soundRef.current?.setSpeed(next.phase === "flying" ? next.speed : 0);
       if (now - lastUI > 80 || next.phase !== state.phase) {
         setFlight({ ...next });
+        setDelivery(deliveryRef.current);
+        setAimView({ prediction: predictionRef.current, charge });
         lastUI = now;
       }
       frame = requestAnimationFrame(tick);
@@ -317,6 +384,7 @@ export default function SleighSimulator({
       "d",
       "shift",
       " ",
+      "i", "j", "k", "l", "e",
     ];
     const down = (event: KeyboardEvent) => {
       if (!root.current?.contains(document.activeElement) || sceneError) return;
@@ -340,10 +408,14 @@ export default function SleighSimulator({
         if (key === " " && event.target instanceof HTMLButtonElement) return;
         event.preventDefault();
         keys.current.add(key);
+        if (key === "e" && !event.repeat) beginThrow();
       }
     };
-    const up = (event: KeyboardEvent) =>
-      keys.current.delete(event.key.toLowerCase());
+    const up = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      keys.current.delete(key);
+      if (key === "e") releaseThrow();
+    };
     const blur = () => {
       clearInput();
       if (stateRef.current.phase === "flying") pause();
@@ -361,11 +433,11 @@ export default function SleighSimulator({
       window.removeEventListener("blur", blur);
       document.removeEventListener("visibilitychange", visibility);
     };
-  }, [pause, resume, clearInput, dialog, sceneError]);
+  }, [pause, resume, clearInput, dialog, sceneError, beginThrow, releaseThrow]);
   // Keep focus inside overlays and restore it to the simulator when they close.
   const dialogBox = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!dialog && phase !== "paused" && phase !== "complete" && !sceneError)
+    if (!dialog && phase !== "paused" && !showResults && !sceneError)
       return;
     const simulator = root.current;
     const previous = document.activeElement as HTMLElement | null;
@@ -395,7 +467,7 @@ export default function SleighSimulator({
       else if (previous?.isConnected) previous.focus();
       else simulator?.focus();
     };
-  }, [dialog, phase, sceneError]);
+  }, [dialog, phase, sceneError, showResults]);
   const touchButton = (
     label: string,
     axis: "steer" | "climb" | "boost" | "brake",
@@ -424,7 +496,6 @@ export default function SleighSimulator({
     </button>
   );
   const routePercent = Math.min(100, (flight.distance / ROUTE_LENGTH) * 100);
-  const nextGate = STAR_GATES[flight.nextGate];
   const environment = getEnvironment(flight.elapsed, { timeMode, weatherMode });
   const routeStop = routeStopAt(flight.distance);
   const routeKm = (ROUTE_LENGTH / 1000).toLocaleString("nb-NO", {
@@ -436,6 +507,22 @@ export default function SleighSimulator({
       ref={root}
       tabIndex={-1}
       aria-label="Julius sin sledesimulator"
+      onPointerMove={(event) => {
+        if (event.pointerType !== "mouse" || stateRef.current.phase !== "flying" || dialog || map || sceneError) return;
+        if ((event.target as HTMLElement).closest("button,select,input,.sl-overlay,.sl-map")) return;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        aimRef.current = pointerAim((event.clientX - bounds.left) / bounds.width, (event.clientY - bounds.top) / bounds.height);
+      }}
+      onPointerDown={(event) => {
+        if (event.pointerType !== "mouse" || event.button !== 0 || dialog || map || sceneError || stateRef.current.phase !== "flying") return;
+        if ((event.target as HTMLElement).closest("button,select,input,.sl-overlay,.sl-map")) return;
+        event.preventDefault();
+        event.currentTarget.focus();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        beginThrow(event.pointerId);
+      }}
+      onPointerUp={(event) => releaseThrow(event.pointerId)}
+      onPointerCancel={() => { chargeRef.current = null; }}
     >
       <canvas
         ref={canvas}
@@ -536,7 +623,7 @@ export default function SleighSimulator({
           </h1>
           <p>
             Bli med Julius og hjelperen hans over tretoppene,
-            <br className="sl-desktop-break" /> følg stjernene, og finn veien
+            <br className="sl-desktop-break" /> lever gaver til husene, og finn veien
             hjem til Snøfall.
           </p>
           <button
@@ -560,8 +647,8 @@ export default function SleighSimulator({
             <div>
               <span>ET LITE RÅD FRA JULIUS</span>
               <blockquote>
-                «Det viktigste er å ha tro på
-                <br /> at sleden kan fly.»
+                «En god gave fortjener
+                <br /> en myk landing.»
               </blockquote>
             </div>
           </div>
@@ -577,19 +664,17 @@ export default function SleighSimulator({
               {routeStop.distance === 0 ? "Over tretoppene" : routeStop.name}
             </h2>
             <span className="sl-flight-sub">
-              {nextGate
-                ? `Neste stjerne om ${Math.max(0, Math.round(nextGate.distance - flight.distance))} meter`
-                : "Følg dalen hjem til Snøfall"}
+              {delivery.deliveries} av {DELIVERY_TARGET_COUNT} hus har fått gaver · Brems for et sikrere kast
             </span>
           </div>
           <div className="sl-flight-status">
             <div>
-              <span className="sl-eyebrow">STJERNER</span>
-              <strong>
-                <Icon name="star" size={22} />
-                {flight.stars}
-                <small>/ {STAR_GATES.length}</small>
-              </strong>
+              <span className="sl-eyebrow">GAVEPOENG</span>
+              <strong>{delivery.score.toLocaleString("nb-NO")}<small>poeng</small></strong>
+            </div>
+            <div>
+              <span className="sl-eyebrow">HUS MED GAVER</span>
+              <strong>{delivery.deliveries}<small>/ {DELIVERY_TARGET_COUNT}</small></strong>
             </div>
             <div>
               <span className="sl-eyebrow">SLEDENS TILSTAND</span>
@@ -618,13 +703,19 @@ export default function SleighSimulator({
             </button>
           )}
           {flying && (
-            <div className="sl-aim">
-              <span />
-              <span />
-              <span />
-              <span />
+            <div className="sl-delivery-aim" aria-label="Kastesikte">
+              <span className="sl-eyebrow">FORVENTET LANDING</span>
+              <strong>{aimView.prediction?.distance == null ? "Sikt mot et merket hus" :
+                aimView.prediction.distance < 0.5 ? "Rett på huset" :
+                `${Math.round(aimView.prediction.distance)} m fra huset`}</strong>
+              <span>{aimView.prediction?.pointsValue ? `${aimView.prediction.pointsValue} mulige poeng` : "Gullmerke = hus som venter på gave"}</span>
+              <div className="sl-charge" role="meter" aria-label="Kastestyrke" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(aimView.charge * 100)}>
+                <i style={{ width: `${aimView.charge * 100}%` }} />
+              </div>
+              <small>{aimView.charge > 0 ? "SLIPP FOR Å KASTE" : "SIKT MED MUS / I J K L · HOLD OG SLIPP E / MUSEKNAPP"}</small>
             </div>
           )}
+          {phase === "complete" && !showResults && <div className="sl-settling" role="status">De siste gavene er fortsatt i lufta …</div>}
           {flying && (
             <div className="sl-touch-controls" aria-label="Berøringskontroller">
               <div className="sl-dpad">
@@ -633,9 +724,32 @@ export default function SleighSimulator({
                 {touchButton("Fly lavere", "climb", -1, "↓")}
                 {touchButton("Styr til høyre", "steer", 1, "→")}
               </div>
-              <div>
-                {touchButton("Brems", "brake", true, "BREMS")}
-                {touchButton("Øk farten", "boost", true, "FART +")}
+              <div className="sl-touch-delivery">
+                <button className="sl-aim-pad" aria-label="Dra for å sikte med pakken"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    const bounds = event.currentTarget.getBoundingClientRect();
+                    aimRef.current = pointerAim((event.clientX - bounds.left) / bounds.width, (event.clientY - bounds.top) / bounds.height);
+                  }}
+                  onPointerMove={(event) => {
+                    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+                    const bounds = event.currentTarget.getBoundingClientRect();
+                    aimRef.current = pointerAim((event.clientX - bounds.left) / bounds.width, (event.clientY - bounds.top) / bounds.height);
+                  }}
+                >⌖<small>DRA · SIKT</small></button>
+                <button className="sl-throw-button" aria-label="Hold og slipp for å kaste en gave"
+                  onPointerDown={(event) => {
+                    event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); beginThrow(event.pointerId);
+                  }}
+                  onPointerUp={(event) => releaseThrow(event.pointerId)}
+                  onPointerCancel={() => { chargeRef.current = null; }}
+                  onClick={(event) => { if (event.detail === 0 && stateRef.current.phase === "flying") throwQueueRef.current = 36; }}
+                >{aimView.charge > 0 ? "SLIPP!" : "HOLD · KAST"}</button>
+                <div className="sl-touch-speed">
+                  {touchButton("Brems", "brake", true, "BREMS")}
+                  {touchButton("Øk farten", "boost", true, "FART +")}
+                </div>
               </div>
             </div>
           )}
@@ -667,7 +781,7 @@ export default function SleighSimulator({
               <Icon name="close" size={16} />
             </button>
           </div>
-          <h3>Følg stjernene hjem.</h3>
+          <h3>Gaver til hele dalen.</h3>
           <ol>
             {ROUTE_STOPS.map((stop, i) => (
               <li
@@ -689,7 +803,7 @@ export default function SleighSimulator({
             ))}
           </ol>
           <p>
-            {routeKm} kilometer · {STAR_GATES.length} stjerner · Ca. 5 minutter
+            {routeKm} kilometer · {DELIVERY_TARGET_COUNT} hus · Ca. 5 minutter
           </p>
         </aside>
       )}
@@ -710,7 +824,9 @@ export default function SleighSimulator({
                   ? "ALLE SYSTEMER KLARE"
                   : phase === "paused"
                     ? "SIMULATOR PÅ PAUSE"
-                    : "KLAR FOR AVREISE"}
+                    : phase === "complete"
+                      ? "GAVENE LANDER"
+                      : "KLAR FOR AVREISE"}
               </span>
             </div>
             <div className="sl-reindeer-status">
@@ -778,11 +894,15 @@ export default function SleighSimulator({
           <span>fart</span>
           <kbd>MELLOMROM</kbd>
           <span>brems</span>
+          <kbd>I J K L</kbd>
+          <span>sikt</span>
+          <kbd>E</kbd>
+          <span>hold · kast</span>
           <kbd>P</kbd>
           <span>pause</span>
         </div>
       )}
-      <div className={`sl-notice ${notice ? "is-visible" : ""}`} role="status">
+      <div className={`sl-notice ${notice && phase !== "complete" ? "is-visible" : ""}`} role="status">
         {notice}
       </div>
       {audioError && (
@@ -827,7 +947,7 @@ export default function SleighSimulator({
           </section>
         </div>
       )}
-      {phase === "complete" && !sceneError && (
+      {showResults && !sceneError && (
         <div
           className="sl-overlay"
           ref={dialogBox}
@@ -858,16 +978,14 @@ export default function SleighSimulator({
                 ? "Du fant veien tilbake til Snøfall."
                 : "Sleden trenger en liten tur innom verkstedet."}
               <br />
-              Du samlet {flight.stars} av {STAR_GATES.length} stjerner på{" "}
-              {Math.round(flight.elapsed)} sekunder.
+              {delivery.deliveries} hus fikk gaver fra {delivery.thrown} kast på {Math.round(flight.elapsed)} sekunder.
             </p>
             <div
               className="sl-result-score"
-              aria-label={`${flight.stars} av ${STAR_GATES.length} stjerner`}
+              aria-label={`${delivery.score} gavepoeng`}
             >
-              <Icon name="star" size={25} />
-              <strong>{flight.stars}</strong>
-              <span>/ {STAR_GATES.length} stjerner</span>
+              <strong>{delivery.score.toLocaleString("nb-NO")}</strong>
+              <span>gavepoeng</span>
             </div>
             <button
               className="sl-launch"
@@ -916,8 +1034,10 @@ export default function SleighSimulator({
             {dialog === "help" ? (
               <>
                 <p>
-                  Følg de gyldne stjernene gjennom dalen. Fly gjennom dem for å
-                  samle dem, og kom trygt hjem med sleden i behold.
+                  Kast gaver til husene med gullmerke. Den buede siktelinjen viser
+                  hvor pakken vil lande. Treff huset for 1000 poeng; nærme landinger gir også poeng.
+                  Innenfor 10 meter får huset en gave og merket blir grønt.
+                  Bare det beste kastet til hvert hus teller.
                 </p>
                 <div className="sl-controls-list">
                   <div>
@@ -925,6 +1045,14 @@ export default function SleighSimulator({
                       <kbd>W A S D</kbd> / <kbd>↑ ← ↓ →</kbd>
                     </span>
                     <span>Styr og endre høyde</span>
+                  </div>
+                  <div>
+                    <kbd>MUS</kbd> / <kbd>I J K L</kbd>
+                    <span>Sikt til siden og opp eller ned</span>
+                  </div>
+                  <div>
+                    <kbd>E</kbd> / <kbd>MUSEKNAPP</kbd>
+                    <span>Hold for mer kraft, slipp for å kaste</span>
                   </div>
                   <div>
                     <kbd>SHIFT</kbd>
@@ -940,8 +1068,10 @@ export default function SleighSimulator({
                   </div>
                 </div>
                 <p className="sl-small-copy">
-                  På mobil bruker du knappene på skjermen. Hold deg over
-                  tretoppene og innenfor dalen. Du har tre liv.
+                  Pakken arver sledens fart og påvirkes av tyngdekraft og vind.
+                  Brems før huset for mer tid til å sikte. På mobil drar du i
+                  siktefeltet og holder og slipper kasteknappen. Hold deg over
+                  tretoppene og innenfor dalen. Du har tre liv og gaver til hele reisen.
                 </p>
                 <button
                   className="sl-launch"
@@ -1046,8 +1176,8 @@ export default function SleighSimulator({
         </div>
       )}
       <span className="sl-sr-only" aria-live="polite">
-        {phase === "complete"
-          ? `Flytur ferdig. ${flight.stars} stjerner.`
+        {showResults
+          ? `Flytur ferdig. ${delivery.score} gavepoeng. ${delivery.deliveries} hus fikk gaver.`
           : phase === "paused"
             ? "Flyturen er på pause."
             : phase === "flying"

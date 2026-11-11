@@ -263,33 +263,3 @@ export function createSleighRig(): SleighRig {
     },
   };
 }
-
-export function createStar(): Float32Array {
-  const m = new MeshBuilder(),
-    tint = colour(0xffd281),
-    points: Vec3[] = [];
-  for (let i = 0; i < 10; i++) {
-    const a = Math.PI / 2 + (i * Math.PI) / 5,
-      r = i % 2 ? 2.65 : 6.3;
-    points.push([Math.cos(a) * r, Math.sin(a) * r, 0.65]);
-  }
-  for (let i = 0; i < 10; i++) {
-    const a = points[i],
-      b = points[(i + 1) % 10];
-    m.triangle([0, 0, 1.1], a, b, tint, 1.1);
-    m.triangle([0, 0, -0.7], [b[0], b[1], -0.5], [a[0], a[1], -0.5], tint, 0.8);
-    m.quad(a, [a[0], a[1], -0.5], [b[0], b[1], -0.5], b, gold, 0.5);
-  }
-  for (let i = 0; i < 64; i++) {
-    const a = (i / 64) * Math.PI * 2,
-      b = ((i + 1) / 64) * Math.PI * 2;
-    m.rod(
-      [Math.cos(a) * 17, Math.sin(a) * 15, 0],
-      [Math.cos(b) * 17, Math.sin(b) * 15, 0],
-      0.16,
-      gold,
-      5,
-    );
-  }
-  return m.build();
-}

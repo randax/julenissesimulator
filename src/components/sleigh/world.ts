@@ -2,6 +2,7 @@ import { MeshBuilder, colour, point, transform } from "./geometry.ts";
 import { addTerrain, terrainHeight, pathCenter } from "./terrain.ts";
 import { createFir } from "./vegetation.ts";
 import { WORLD_TILE_LENGTH } from "./route.ts";
+import { HOUSE_LAYOUT } from "./houses.ts";
 import {
   addBridge,
   addLantern,
@@ -33,42 +34,30 @@ export function createWorld(): WorldData {
   addTerrain(mesh);
   const farTerrain = new MeshBuilder();
   addTerrain(farTerrain, true);
-  let houseSeed = 0;
+  for (const { id, side, x, y, z, width, depth, height, yaw } of HOUSE_LAYOUT) {
+    const placement = transform([x, y, z], [0, yaw, 0]);
+    mesh.append(createCottage(width, depth, height, id), placement);
+    for (const source of cottageGlowPoints(width, depth, height)) {
+      const p = point(placement, source);
+      glows.push(...p, 1.9);
+    }
+    const lampX = side * 24,
+      lampY = terrainHeight(lampX, z + 13);
+    addLantern(mesh, lampX, lampY, z + 13);
+    glows.push(lampX + 1.45, lampY + 5.15, z + 13, 2.3);
+    mesh.ellipsoid(
+      [x - side * width * 0.55, y + 0.65, z + depth * 0.37],
+      [width * 0.43, 1.5, width * 0.2],
+      colour(0xd7e2f0),
+      12,
+      6,
+    );
+  }
   for (const [start, rows] of [
     [-6, 4],
     [-720, 3],
     [-1510, 3],
   ]) {
-    for (let row = 0; row < rows; row++)
-      for (const side of [-1, 1]) {
-        const seed = houseSeed++,
-          z = start - row * 70 + (random(seed + 44) - 0.5) * 12;
-        const x = side * (48 + (row % 2) * 18 + random(seed + 18) * 13),
-          y = terrainHeight(x, z);
-        const width = 17 + random(seed + 65) * 4,
-          depth = width * 0.86,
-          height = 27 + random(seed + 81) * 7;
-        const placement = transform(
-          [x, y, z],
-          [0, side * 0.11 + (random(seed + 8) - 0.5) * 0.15, 0],
-        );
-        mesh.append(createCottage(width, depth, height, seed), placement);
-        for (const source of cottageGlowPoints(width, depth, height)) {
-          const p = point(placement, source);
-          glows.push(...p, 1.9);
-        }
-        const lampX = side * 24,
-          lampY = terrainHeight(lampX, z + 13);
-        addLantern(mesh, lampX, lampY, z + 13);
-        glows.push(lampX + 1.45, lampY + 5.15, z + 13, 2.3);
-        mesh.ellipsoid(
-          [x - side * width * 0.55, y + 0.65, z + depth * 0.37],
-          [width * 0.43, 1.5, width * 0.2],
-          colour(0xd7e2f0),
-          12,
-          6,
-        );
-      }
     for (const side of [-1, 1])
       for (let z = start + 25; z > start - rows * 70 + 15; z -= 9) {
         const x = side * 27 + pathCenter(z) * 0.5,

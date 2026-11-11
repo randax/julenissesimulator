@@ -1,5 +1,5 @@
-import { ROUTE_LENGTH, STAR_GATES } from "./route.ts";
-export { ROUTE_LENGTH, STAR_GATES, type StarGate } from "./route.ts";
+import { ROUTE_LENGTH } from "./route.ts";
+export { ROUTE_LENGTH } from "./route.ts";
 
 export type FlightPhase = "ready" | "flying" | "paused" | "complete";
 
@@ -17,12 +17,10 @@ export interface FlightState {
   /** Ground speed in km/h. */
   speed: number;
   distance: number;
-  stars: number;
   lives: number;
   elapsed: number;
   /** Bank angle in radians. */
   heading: number;
-  nextGate: number;
   /** Seconds of collision protection remaining. */
   cooldown: number;
   outcome: null | "arrived" | "crashed";
@@ -47,11 +45,9 @@ export function createFlight(): FlightState {
     altitude: 35,
     speed: 0,
     distance: 0,
-    stars: 0,
     lives: 3,
     elapsed: 0,
     heading: 0,
-    nextGate: 0,
     cooldown: 0,
     outcome: null,
   };
@@ -102,22 +98,6 @@ export function stepFlight(
     altitude = Math.max(altitude, 26);
   }
 
-  let nextGate = state.nextGate;
-  let stars = state.stars;
-  while (
-    nextGate < STAR_GATES.length &&
-    STAR_GATES[nextGate].distance <= distance
-  ) {
-    const gate = STAR_GATES[nextGate];
-    if (
-      gate.distance >= state.distance &&
-      Math.abs(x - gate.x) <= 22 &&
-      Math.abs(altitude - gate.altitude) <= 18
-    )
-      stars++;
-    nextGate++;
-  }
-
   const outcome =
     lives === 0 ? "crashed" : distance >= ROUTE_LENGTH ? "arrived" : null;
   return {
@@ -127,12 +107,10 @@ export function stepFlight(
     altitude,
     speed,
     distance,
-    stars,
     lives,
     elapsed: state.elapsed + dt,
     heading:
       state.heading + (-steer * 0.3 - state.heading) * (1 - Math.exp(-dt * 5)),
-    nextGate,
     cooldown,
     outcome,
   };

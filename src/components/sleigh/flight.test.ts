@@ -6,12 +6,16 @@ import {
   pauseFlight,
   resumeFlight,
   stepFlight,
-  STAR_GATES,
   ROUTE_LENGTH,
   FLIGHT_SPEEDS,
 } from "./flight.ts";
 import type { FlightInput, FlightState } from "./flight.ts";
-import { WORLD_TILE_LENGTH, ROUTE_STOPS, routeStopAt } from "./route.ts";
+import {
+  WORLD_TILE_LENGTH,
+  LAUNCH_APPROACH,
+  ROUTE_STOPS,
+  routeStopAt,
+} from "./route.ts";
 
 const idle: FlightInput = { steer: 0, climb: 0, boost: false, brake: false };
 const flying = (overrides: Partial<FlightState> = {}) => ({
@@ -43,32 +47,6 @@ test("elapsed time and distance advance deterministically and tab stalls are cap
   assert.equal(stepFlight(state, idle, Number.NaN), state);
 });
 
-test("a star is collected once when crossing its position inside both tolerances", () => {
-  const gate = STAR_GATES[0];
-  const before = flying({
-    distance: gate.distance - 1,
-    x: gate.x,
-    altitude: gate.altitude,
-  });
-  const collected = stepFlight(before, idle, 0.1);
-  assert.equal(collected.stars, 1);
-  assert.equal(collected.nextGate, 1);
-  assert.equal(stepFlight(collected, idle, 0.1).stars, 1);
-  assert.equal(before.stars, 0);
-});
-
-test("missing a star consumes that gate without awarding it or losing a life", () => {
-  const gate = STAR_GATES[0];
-  const missed = stepFlight(
-    flying({ distance: gate.distance - 1, altitude: 90 }),
-    idle,
-    0.1,
-  );
-  assert.equal(missed.nextGate, 1);
-  assert.equal(missed.stars, 0);
-  assert.equal(missed.lives, 3);
-});
-
 test("ground and route-edge collisions cost one life and protection prevents repeat damage", () => {
   for (const obstacle of [{ altitude: 1 }, { x: 145 }]) {
     const hit = stepFlight(flying(obstacle), idle, 0.1);
@@ -98,8 +76,6 @@ test("arrival ends at the route length, retaining the result", () => {
   const arrived = stepFlight(
     flying({
       distance: ROUTE_LENGTH - 1,
-      stars: 5,
-      nextGate: STAR_GATES.length,
     }),
     idle,
     0.1,
@@ -107,7 +83,6 @@ test("arrival ends at the route length, retaining the result", () => {
   assert.equal(arrived.distance, ROUTE_LENGTH);
   assert.equal(arrived.phase, "complete");
   assert.equal(arrived.outcome, "arrived");
-  assert.equal(arrived.stars, 5);
   assert.equal(stepFlight(arrived, idle, 0.1), arrived);
 });
 
@@ -165,49 +140,17 @@ test("lateral and vertical controls remain responsive at faster flight speeds", 
   assert.equal(state.lives, 3);
 });
 
-test("the longer route distributes reachable star gates across the full journey", () => {
-  assert.equal(ROUTE_LENGTH, 18000);
-  assert.equal(WORLD_TILE_LENGTH, 2400);
-  assert.equal(STAR_GATES.length, 60);
-  assert.deepEqual(STAR_GATES[0], { distance: 180, x: 0, altitude: 35 });
-  assert.equal(STAR_GATES.at(-1)?.distance, 17880);
-  STAR_GATES.forEach((gate, index) => {
-    assert.ok(gate.distance > 0 && gate.distance < ROUTE_LENGTH);
-    assert.ok(Math.abs(gate.x) <= 55);
-    assert.ok(gate.altitude >= 35 && gate.altitude <= 80);
-    assert.ok(Object.values(gate).every(Number.isFinite));
-    if (index === 0) return;
-    const previous = STAR_GATES[index - 1];
-    const availableTime =
-      (gate.distance - previous.distance) / (FLIGHT_SPEEDS.boost / 3.6);
-    assert.equal(gate.distance - previous.distance, 300);
-    assert.ok(Math.abs(gate.x - previous.x) / 60 < availableTime);
-    assert.ok(Math.abs(gate.altitude - previous.altitude) / 32 < availableTime);
-  });
-});
-
 test("passing the old finish line keeps the longer flight running", () => {
-  const state = stepFlight(flying({ distance: 1800, nextGate: 6 }), idle, 0.1);
+  const state = stepFlight(flying({ distance: 1800 }), idle, 0.1);
   assert.equal(state.phase, "flying");
   assert.equal(state.outcome, null);
   assert.ok(state.distance > 1800 && state.distance < ROUTE_LENGTH);
-  const finalGate = STAR_GATES.at(-1)!;
-  const collected = stepFlight(
-    flying({
-      distance: finalGate.distance - 1,
-      nextGate: STAR_GATES.length - 1,
-      x: finalGate.x,
-      altitude: finalGate.altitude,
-    }),
-    idle,
-    0.1,
-  );
-  assert.equal(collected.stars, 1);
-  assert.equal(collected.nextGate, STAR_GATES.length);
-  assert.equal(collected.phase, "flying");
 });
 
 test("route waypoints track progress and clamp to the start or home", () => {
+  assert.equal(ROUTE_LENGTH, 18000);
+  assert.equal(WORLD_TILE_LENGTH, 2400);
+  assert.equal(LAUNCH_APPROACH, 250);
   assert.equal(ROUTE_STOPS.length, 6);
   assert.equal(routeStopAt(-100), ROUTE_STOPS[0]);
   assert.equal(routeStopAt(Number.NaN), ROUTE_STOPS[0]);

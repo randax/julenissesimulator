@@ -1995,3 +1995,75 @@
   font-size: 11px;
   color: #c3d0c1;
 }
+/* Precision delivery controls complement the physical trajectory in the world. */
+.sl-delivery-aim {
+  position: absolute;
+  left: 5%;
+  bottom: 255px;
+  width: 290px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: center;
+  pointer-events: none;
+  background: #15323dc9;
+  border: 1px solid #ddcc9b45;
+  border-radius: 5px;
+  backdrop-filter: blur(7px);
+}
+.sl-delivery-aim .sl-eyebrow { font-size: 7px; }
+.sl-delivery-aim strong { font: 19px Georgia, serif; color: #f1d7a3; }
+.sl-delivery-aim > span:not(.sl-eyebrow) { font-size: 10px; color: #d5ded0; }
+.sl-delivery-aim small { font-size: 6px; letter-spacing: .7px; color: #d6d8c4; }
+.sl-charge { height: 4px; background: #e7d5a42b; border-radius: 4px; overflow: hidden; }
+.sl-charge i { display: block; height: 100%; background: #edca83; }
+.sl-settling { position: absolute; top: 44%; left: 50%; transform: translateX(-50%); padding: 16px 24px; background: #15323de6; border: 1px solid #d9c69166; border-radius: 5px; white-space: nowrap; font: 20px Georgia, serif; }
+.sl-touch-controls > .sl-touch-delivery { flex-direction: column; align-items: center; gap: 7px; }
+.sl-touch-controls > .sl-touch-delivery > .sl-aim-pad { width: 82px; height: 82px; font-size: 32px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; touch-action: none; }
+.sl-aim-pad small { font-size: 7px; letter-spacing: .5px; }
+.sl-touch-controls > .sl-touch-delivery > .sl-throw-button { width: 116px; height: 40px; font-size: 9px; background: #78633edb; border-color: #ead09a; touch-action: none; }
+.sl-touch-speed { display: flex; gap: 7px; }
+.sl-touch-controls .sl-touch-speed > button { width: 54px; font-size: 8px; letter-spacing: 1px; }
+@media (max-width: 800px), (pointer: coarse) {
+  .sl-delivery-aim { left: 5%; top: 292px; bottom: auto; transform: none; width: 180px; text-align: left; padding: 10px 12px; }
+  .sl-delivery-aim strong { font-size: 16px; }
+  .sl-delivery-aim small { display: none; }
+  .sl-touch-controls { bottom: 166px; }
+  .sl-third-person.is-active .sl-location { top: 285px; bottom: auto; right: 6%; padding: 3px; }
+  .is-active .sl-location > div, .is-active .sl-location-mark { display: none; }
+  .sl-touch-controls .sl-touch-speed > button { height: 38px; }
+  .sl-flight-status { gap: 17px; }
+  .sl-flight-status strong > small { font-size: 9px; }
+}
+@media (max-width: 520px) {
+  .sl-third-person .sl-flight-status { left: 7%; right: auto; top: 215px; gap: 16px; }
+  .sl-flight-status > div { gap: 9px; }
+  .sl-flight-status strong { font-size: 23px; }
+  .sl-flight-status .sl-lives > svg { width: 18px; }
+  .sl-flight-status .sl-lives { gap: 3px; }
+  .sl-flight-sub { display: block; max-width: 275px; line-height: 1.5; }
+  .sl-pause { top: 210px; }
+  .sl-delivery-aim { top: 285px; left: 7%; width: 170px; }
+  .sl-third-person.is-active .sl-location { top: 287px; }
+  .sl-touch-controls { bottom: 158px; }
+  .sl-notice { bottom: 360px; font-size: 15px; }
+  .sl-settling { width: 80%; white-space: normal; text-align: center; font-size: 18px; }
+}
+@media (max-height: 740px) and (max-width: 520px) {
+  .sl-third-person .sl-flight-status { top: 205px; }
+  .sl-delivery-aim { top: 272px; }
+  .sl-third-person.is-active .sl-location { top: 274px; }
+  .sl-touch-controls { bottom: 134px; }
+  .sl-touch-controls > .sl-touch-delivery > .sl-aim-pad { width: 66px; height: 66px; }
+  .sl-notice { bottom: 320px; }
+}
+@media (max-height: 560px) and (min-width: 521px) {
+  .sl-delivery-aim { left: 5%; top: 185px; bottom: auto; transform: none; width: 180px; padding: 9px 11px; text-align: left; }
+  .sl-delivery-aim small { display: none; }
+  .sl-flight-status { top: 95px; }
+  .sl-touch-controls { bottom: 110px; }
+  .sl-touch-controls > .sl-touch-delivery { flex-direction: row; }
+  .sl-touch-controls > .sl-touch-delivery > .sl-aim-pad { width: 66px; height: 66px; }
+  .sl-touch-speed { flex-direction: column; }
+}

@@ -1,9 +1,10 @@
-import { STAR_GATES, type FlightState } from "./flight";
+import type { FlightState } from "./flight";
 import {
   identity,
   lookAt,
   multiply,
-  part,
+  MeshBuilder,
+  colour,
   perspective,
   STRIDE,
   transform,
@@ -11,16 +12,25 @@ import {
   type ModelPart,
   type Vec3,
 } from "./geometry";
-import { createSleighRig, createStar } from "./models";
+import { createSleighRig } from "./models";
 import { createWorld } from "./world";
 import { cameraPose } from "./camera";
 import { getEnvironment, type EnvironmentOptions } from "./environment";
-import { WORLD_TILE_LENGTH } from "./route";
+import { LAUNCH_APPROACH, WORLD_TILE_LENGTH } from "./route";
+import { targetsNear } from "./houses";
+import { DELIVERED_DISTANCE, type Aim, type DeliveryState, type ThrowPrediction } from "./delivery";
+import { createPackageMeshes, createHouseMarker, createLandingMarker } from "./package-models";
 import { journeySpace, visibleTiles } from "./journey-space";
 
 export interface SceneOptions extends Partial<EnvironmentOptions> {
   snow: boolean;
   gentle: boolean;
+}
+export interface DeliveryVisual {
+  delivery: DeliveryState;
+  prediction: ThrowPrediction | null;
+  aim: Aim;
+  charge: number;
 }
 type GpuMesh = { buffer: WebGLBuffer; count: number };
 import {
@@ -100,10 +110,16 @@ export class SleighScene {
   private warmLightLocation: WebGLUniformLocation | null = null;
   private warmLightData = new Float32Array(24);
   private rig = createSleighRig();
-  private starMesh = createStar();
-  private stars = STAR_GATES.map((gate) =>
-    part(this.starMesh, [gate.x, gate.altitude, -gate.distance]),
-  );
+  private packageMeshes = createPackageMeshes();
+  private houseMarkers = [createHouseMarker(false), createHouseMarker(true)];
+  private landingMarkers = {
+    perfect: createLandingMarker("perfect"),
+    close: createLandingMarker("close"),
+    miss: createLandingMarker("miss"),
+  };
+  private guideBuffer: WebGLBuffer | null = null;
+  private lastThrown = 0;
+  private throwTime = -1;
   private camera: Vec3 = [12, 48, 32];
   private width = 1;
   private height = 1;
@@ -208,6 +224,7 @@ export class SleighScene {
   }
   private initialise() {
     const gl = this.gl;
+    this.guideBuffer = gl.createBuffer();
     this.program = this.createProgram(VERTEX, FRAGMENT);
     this.depthProgram = this.createProgram(DEPTH_VERTEX, DEPTH_FRAGMENT);
     this.depthAttribute = gl.getAttribLocation(this.depthProgram, "aPosition");
@@ -354,7 +371,7 @@ export class SleighScene {
     };
     this.upload(this.data.farMesh);
     this.upload(this.world);
-    this.upload(this.starMesh);
+    for (const mesh of [...this.packageMeshes, ...this.houseMarkers, ...Object.values(this.landingMarkers)]) this.upload(mesh);
     const visit = (node: ModelPart) => {
       if (node.mesh) this.upload(node.mesh);
       node.children.forEach(visit);
@@ -532,7 +549,65 @@ export class SleighScene {
     }
     gl.uniform1i(locations.enabled, 0);
   }
-  draw(state: FlightState, time: number, options: SceneOptions) {
+  private drawPackages(visual: DeliveryVisual, origin: number, shadow = false) {
+    for (const parcel of visual.delivery.packages) {
+      const p = parcel.position;
+      if (Math.abs(p[2] + origin - this.camera[2]) > 1200) continue;
+      this.drawMesh(
+        this.packageMeshes[parcel.id % this.packageMeshes.length],
+        transform(
+          [p[0], p[1], p[2] + origin],
+          parcel.landed ? [0, parcel.id * 1.7, 0] : [parcel.age * 2.2, parcel.age * 1.4, parcel.age * 0.7],
+        ),
+        shadow,
+        true,
+      );
+    }
+  }
+  private drawDelivery(visual: DeliveryVisual, state: FlightState, origin: number, time: number) {
+    const gl = this.gl;
+    this.drawPackages(visual, origin);
+    for (const house of targetsNear(state.distance, 950, 130)) {
+      const served = (visual.delivery.houseScores[house.id]?.distance ?? Infinity) <= DELIVERED_DISTANCE;
+      const selected = visual.prediction?.houseId === house.id;
+      const size = selected ? 1.7 : 1.15;
+      this.drawMesh(
+        this.houseMarkers[served ? 1 : 0],
+        transform(
+          [house.x, house.y + house.height + 3 + Math.sin(time * 2 + house.localId) * 0.4, house.z + origin],
+          [0, time * 0.3, 0], [size, size, size],
+        ),
+      );
+    }
+    const prediction = visual.prediction;
+    if (!prediction || state.phase !== "flying") return;
+    const kind = (prediction.distance ?? Infinity) <= 2 ? "perfect" : (prediction.distance ?? Infinity) <= 15 ? "close" : "miss";
+    if (prediction.landing) {
+      const p = prediction.landing;
+      this.drawMesh(this.landingMarkers[kind], transform([p[0], p[1] + 0.12, p[2] + origin]));
+    }
+    // One reusable streaming buffer: the preview never enters the static mesh cache.
+    const guide = new MeshBuilder();
+    const tint = colour(kind === "perfect" ? 0x90ffc9 : kind === "close" ? 0xffd38c : 0xe7bbb3);
+    const points = prediction.points;
+    for (let i = 1; i < points.length; i++) {
+      if (i % 3 === 0) continue;
+      const a = points[i - 1], b = points[i];
+      if (Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]) < 0.001) continue;
+      guide.rod([a[0], a[1], a[2] + origin], [b[0], b[1], b[2] + origin], 0.11, tint, 4);
+    }
+    const vertices = guide.build();
+    if (!vertices.length || !this.guideBuffer) return;
+    for (let i = STRIDE - 1; i < vertices.length; i += STRIDE) vertices[i] = 1;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.guideBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
+    this.attributes({buffer: this.guideBuffer, count: vertices.length / STRIDE});
+    gl.uniform1i(this.forestAttributes.enabled, 0);
+    gl.uniform1i(this.uniforms.localMaterial, 0);
+    gl.uniformMatrix4fv(this.uniforms.model, false, identity());
+    gl.drawArrays(gl.TRIANGLES, 0, vertices.length / STRIDE);
+  }
+  draw(state: FlightState, time: number, options: SceneOptions, delivery?: DeliveryVisual) {
     if (this.lost || this.disposed) return;
     const gl = this.gl,
       dt = Math.max(0, Math.min(0.1, time - this.lastTime));
@@ -552,7 +627,7 @@ export class SleighScene {
       environment.fogDensity * 1000,
     ];
     const space = journeySpace(state.distance, this.renderOrigin);
-    const rendering = { ...state, distance: space.distance };
+    const rendering = { ...state, distance: space.distance - LAUNCH_APPROACH };
     const restarted =
       this.lastDistance < 0 || state.distance < this.lastDistance;
     if (!restarted) this.camera[2] += space.originDelta;
@@ -638,6 +713,13 @@ export class SleighScene {
       options.gentle,
       movement,
     );
+    if (delivery) {
+      if (restarted || delivery.delivery.thrown < this.lastThrown) this.throwTime = -1;
+      if (delivery.delivery.thrown > this.lastThrown) this.throwTime = time;
+      this.lastThrown = delivery.delivery.thrown;
+      const release = Math.max(0, 1 - (time - this.throwTime) / 0.45);
+      this.rig.passengers[1].rightArm.rotation[0] += delivery.charge * 0.35 - release * 0.7;
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFrame);
     gl.disable(gl.DITHER);
     gl.viewport(0, 0, 1024, 1024);
@@ -655,6 +737,7 @@ export class SleighScene {
       );
     this.drawForest(true);
     this.drawPart(this.rig.root, identity(), true);
+    if (delivery) this.drawPackages(delivery, space.origin, true);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.enable(gl.DITHER);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -754,12 +837,7 @@ export class SleighScene {
     }
     this.drawForest();
     this.drawPart(this.rig.root, identity(), false, true);
-    if (state.phase !== "ready" && state.nextGate < this.stars.length) {
-      const star = this.stars[state.nextGate];
-      star.position[2] = -(STAR_GATES[state.nextGate].distance - space.origin);
-      star.rotation[2] = Math.sin(time * 0.8) * 0.06;
-      this.drawPart(star, identity());
-    }
+    if (delivery) this.drawDelivery(delivery, state, space.origin, time);
     for (let i = 0; i < 8; i++) gl.disableVertexAttribArray(i);
     gl.useProgram(this.glowProgram);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.glowBuffer);
@@ -818,6 +896,8 @@ export class SleighScene {
     this.meshes.clear();
     for (const batch of this.forest) gl.deleteBuffer(batch.buffer);
     this.forest = [];
+    if (this.guideBuffer) gl.deleteBuffer(this.guideBuffer);
+    this.guideBuffer = null;
     if (this.glowBuffer) gl.deleteBuffer(this.glowBuffer);
     if (this.glowProgram) gl.deleteProgram(this.glowProgram);
     if (this.skyBuffer) gl.deleteBuffer(this.skyBuffer);

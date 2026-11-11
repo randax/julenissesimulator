@@ -1,31 +1,8 @@
 /** The rendered valley is recycled in seamless tiles along this longer journey. */
 export const WORLD_TILE_LENGTH = 2400;
+/** World-space run-up before the first delivery village. */
+export const LAUNCH_APPROACH = 250;
 export const ROUTE_LENGTH = 18000;
-
-export interface StarGate {
-  distance: number;
-  x: number;
-  altitude: number;
-}
-
-const gatePattern: readonly Omit<StarGate, "distance">[] = [
-  { x: 0, altitude: 35 },
-  { x: -35, altitude: 45 },
-  { x: 40, altitude: 60 },
-  { x: 0, altitude: 80 },
-  { x: -55, altitude: 65 },
-  { x: 45, altitude: 50 },
-  { x: 20, altitude: 70 },
-  { x: 0, altitude: 35 },
-];
-
-export const STAR_GATES: readonly StarGate[] = Array.from(
-  { length: 60 },
-  (_, index) => ({
-    distance: 180 + index * 300,
-    ...gatePattern[index % gatePattern.length],
-  }),
-);
 
 export interface RouteStop {
   distance: number;

@@ -1,6 +1,6 @@
 # Visual references and procedural 3D assets
 
-The current game builds its snowy world, wooden sleigh, Julius and his helper, and articulated reindeer from procedural meshes in `geometry.ts`, `world.ts` and `models.ts`. Native WebGL renders the scene with a third-person follow camera. These models need no external textures, model files or game-engine packages.
+The current game builds its snowy world, wooden sleigh, Julius and his helper, and articulated reindeer from procedural meshes in `geometry.ts`, `world.ts` and `models.ts`. Native WebGL renders the scene with a third-person follow camera. Wrapped red, green and kraft-paper parcels, gold/green delivery-house markers, and accuracy-colored landing markers are procedural meshes in `package-models.ts`. House placement is shared with collision and scoring data in `houses.ts`. These models need no external textures, model files or game-engine packages.
 
 The PNGs below are retained from the earlier sprite renderer as visual references only. The current 3D renderer does not load them, and they are not required when integrating the game.
 
