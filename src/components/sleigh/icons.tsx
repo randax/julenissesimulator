@@ -1,6 +1,8 @@
 import type { CSSProperties } from "react";
 export type IconName =
   | "snow"
+  | "sun"
+  | "moon"
   | "sound"
   | "muted"
   | "expand"
@@ -18,6 +20,13 @@ export type IconName =
   | "sled"
   | "chevron";
 const paths: Record<IconName, React.ReactNode> = {
+  sun: (
+    <>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" />
+    </>
+  ),
+  moon: <path d="M20.5 14.1A9 9 0 019.9 3.5 9 9 0 1020.5 14.1z" />,
   snow: (
     <>
       <path d="M12 2v20M3.34 7l17.32 10M3.34 17L20.66 7M8 4l4 3 4-3M8 20l4-3 4 3M3.6 11l4.6-1.9-.6-4.9M20.4 13l-4.6 1.9.6 4.9M3.6 13l4.6 1.9-.6 4.9M20.4 11l-4.6-1.9.6-4.9" />

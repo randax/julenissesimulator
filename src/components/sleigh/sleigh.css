@@ -1928,3 +1928,70 @@
     #102c3826
   );
 }
+.sl-weather-detail {
+  display: block;
+  font-size: 7px;
+  letter-spacing: 1.3px;
+  margin-top: 6px;
+  color: #e4e8dcc4;
+}
+.sl-select-setting select {
+  max-width: 155px;
+  padding: 9px 10px;
+  color: #eddfbf;
+  background: #203b3c;
+  border: 1px solid #b7b18c66;
+  border-radius: 3px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.sl-simulator select:focus-visible {
+  outline: 2px solid #f1d7a3;
+  outline-offset: 4px;
+}
+.sl-select-setting option {
+  color: #f1ead4;
+  background: #213a39;
+}
+.sl-map {
+  max-height: calc(100% - 210px);
+  overflow-y: auto;
+}
+@media (max-width: 520px) {
+  .sl-weather-detail {
+    font-size: 5px;
+    letter-spacing: 0.5px;
+    margin-top: 4px;
+  }
+  .sl-select-setting {
+    gap: 12px;
+  }
+  .sl-select-setting select {
+    font-size: 10px;
+    max-width: 125px;
+  }
+  .sl-select-setting small {
+    font-size: 8px;
+  }
+}
+.sl-result-score {
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  gap: 10px;
+  margin: 25px 0;
+  color: #e6ce9c;
+}
+.sl-result-score svg {
+  align-self: center;
+  fill: #dcc18b33;
+}
+.sl-result-score strong {
+  font:
+    38px Georgia,
+    serif;
+}
+.sl-result-score span {
+  font-size: 11px;
+  color: #c3d0c1;
+}

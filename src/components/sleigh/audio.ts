@@ -5,6 +5,12 @@ export class SleighAudio {
   private wind: GainNode | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private active = false;
+  private weatherWind = 0;
+  setWeather(wind: number) {
+    this.weatherWind = Number.isFinite(wind)
+      ? Math.max(0, Math.min(16, wind))
+      : 0;
+  }
   async enable() {
     if (!this.context) {
       this.context = new AudioContext();
@@ -40,7 +46,7 @@ export class SleighAudio {
   setSpeed(speed: number) {
     if (this.context && this.wind)
       this.wind.gain.setTargetAtTime(
-        0.08 + speed / 400,
+        Math.min(1, 0.08 + speed / 400 + this.weatherWind / 80),
         this.context.currentTime,
         0.3,
       );

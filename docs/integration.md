@@ -10,6 +10,9 @@ Copy these production files into nissekomm, preserving their relative paths:
 src/components/sleigh/SleighSimulator.tsx
 src/components/sleigh/sleigh.css
 src/components/sleigh/flight.ts
+src/components/sleigh/route.ts
+src/components/sleigh/environment.ts
+src/components/sleigh/journey-space.ts
 src/components/sleigh/scene.ts
 src/components/sleigh/camera.ts
 src/components/sleigh/geometry.ts
@@ -81,11 +84,13 @@ export default function SledeMission() {
 }
 ```
 
-`onComplete` fires once per finished flight, including crashes. It is not called on pause or returning to the workshop. `stars` is an integer from 0–8, `elapsed` is simulation time in seconds, and `arrived` distinguishes arrival from a crash. Client-provided scores are suitable for a family game; validate independently before using them for any consequential reward.
+`onComplete` fires once per finished flight, including crashes. It is not called on pause or returning to the workshop. `stars` is an integer from 0–60, `elapsed` is simulation time in seconds, and `arrived` distinguishes arrival from a crash. Client-provided scores are suitable for a family game; validate independently before using them for any consequential reward.
 
 The game makes no external network requests after loading its own application bundle. Geometry is generated locally and sound is synthesised with Web Audio. The older generated PNGs are optional visual references and should not be copied for runtime integration.
 
-The sleigh launches at 180 km/h, cruises at 230 km/h, boosts to 340 km/h, and brakes toward 100 km/h. `FLIGHT_SPEEDS` in `flight.ts` is the shared source of these values. The 1.8 km route, eight star gates, three lives and completion callback remain independent of rendering. This is a screen-based 3D experience, not a WebXR/VR implementation.
+The sleigh launches at 180 km/h, cruises at 230 km/h, boosts to 340 km/h, and brakes toward 100 km/h. `FLIGHT_SPEEDS` in `flight.ts` is the shared source of these values. The 18 km route, 60 star gates, three lives and completion callback remain independent of rendering. This is a screen-based 3D experience, not a WebXR/VR implementation.
+
+The default journey lasts about 4 minutes 42 seconds at cruise. A three-minute day/night cycle and changing weather run from elapsed flight time, so pausing freezes them and restarting resets them. Settings offer automatic/day/night and automatic/clear/snow/showers; clear nights reveal the animated aurora. Scenery repeats seamlessly in 2.4 km tiles, with shared near/far geometry and local render coordinates.
 
 ## Host verification
 

@@ -1,6 +1,7 @@
 import { MeshBuilder, colour, point, transform } from "./geometry.ts";
 import { addTerrain, terrainHeight, pathCenter } from "./terrain.ts";
 import { createFir } from "./vegetation.ts";
+import { WORLD_TILE_LENGTH } from "./route.ts";
 import {
   addBridge,
   addLantern,
@@ -11,6 +12,8 @@ export { terrainHeight } from "./terrain.ts";
 
 export interface WorldData {
   mesh: Float32Array;
+  /** Terrain-only repeat used beyond the detailed village draw range. */
+  farMesh: Float32Array;
   /** Two shape variants for near, middle, far and distant ridge detail. */
   treeMeshes: Float32Array[];
   /** x,y,z,scale,rotation,variant; uploaded as shared instances by the renderer. */
@@ -28,6 +31,8 @@ export function createWorld(): WorldData {
     glows: number[] = [],
     trees: number[] = [];
   addTerrain(mesh);
+  const farTerrain = new MeshBuilder();
+  addTerrain(farTerrain, true);
   let houseSeed = 0;
   for (const [start, rows] of [
     [-6, 4],
@@ -107,7 +112,7 @@ export function createWorld(): WorldData {
   // Dense hillside forests reuse a small set of full 3D tree meshes.
   for (let i = 0; i < 11200; i++) {
     const side = i % 2 ? 1 : -1,
-      z = 65 - random(i + 719) * 3000;
+      z = -random(i + 719) * WORLD_TILE_LENGTH;
     const x = side * (34 + Math.pow(random(i + 45), 0.79) * 590);
     // Keep cottage entrances and the stream/path visible.
     if (
@@ -129,7 +134,7 @@ export function createWorld(): WorldData {
   }
   // Tall, snowy boughs frame the village entrance just like the reference.
   for (const [x, z, scale] of [
-    [-34, 12, 1.9],
+    [-34, -2, 1.9],
     [35, -8, 1.8],
     [-37, -53, 1.5],
     [39, -91, 1.45],
@@ -185,6 +190,7 @@ export function createWorld(): WorldData {
   }
   return {
     mesh: mesh.build(),
+    farMesh: farTerrain.build(),
     treeMeshes,
     trees: new Float32Array(trees),
     lights: new Float32Array(glows),

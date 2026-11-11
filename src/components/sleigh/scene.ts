@@ -14,8 +14,11 @@ import {
 import { createSleighRig, createStar } from "./models";
 import { createWorld } from "./world";
 import { cameraPose } from "./camera";
+import { getEnvironment, type EnvironmentOptions } from "./environment";
+import { WORLD_TILE_LENGTH } from "./route";
+import { journeySpace, visibleTiles } from "./journey-space";
 
-export interface SceneOptions {
+export interface SceneOptions extends Partial<EnvironmentOptions> {
   snow: boolean;
   gentle: boolean;
 }
@@ -107,6 +110,19 @@ export class SleighScene {
   private ratio = 1;
   private lastTime = 0;
   private lastDistance = -1;
+  private renderOrigin = 0;
+  private climate!: {
+    surface: Record<
+      "environment" | "weather" | "direction",
+      WebGLUniformLocation | null
+    >;
+    sky: Record<
+      "environment" | "weather" | "time" | "solar" | "aspect",
+      WebGLUniformLocation | null
+    >;
+    snow: Record<"weather" | "night", WebGLUniformLocation | null>;
+    glow: Record<"offset" | "night", WebGLUniformLocation | null>;
+  };
   private previousFlight: FlightState | null = null;
   private lost = false;
   error = "";
@@ -272,7 +288,7 @@ export class SleighScene {
       new Float32Array([-1, -1, 3, -1, -1, 3]),
       gl.STATIC_DRAW,
     );
-    const seeds = new Float32Array(450 * 3);
+    const seeds = new Float32Array(2600 * 3);
     for (let i = 0; i < seeds.length; i++)
       seeds[i] = (((Math.sin(i * 127.1 + 3) * 43758.5453) % 1) + 1) % 1;
     this.snowBuffer = gl.createBuffer()!;
@@ -314,6 +330,29 @@ export class SleighScene {
       travel: gl.getUniformLocation(this.snowProgram, "uTravel"),
       pixelRatio: gl.getUniformLocation(this.snowProgram, "uPixelRatio"),
     };
+    this.climate = {
+      surface: {
+        environment: gl.getUniformLocation(this.program, "uEnvironment"),
+        weather: gl.getUniformLocation(this.program, "uWeather"),
+        direction: gl.getUniformLocation(this.program, "uLightDirection"),
+      },
+      sky: {
+        environment: gl.getUniformLocation(this.skyProgram, "uEnvironment"),
+        weather: gl.getUniformLocation(this.skyProgram, "uWeather"),
+        time: gl.getUniformLocation(this.skyProgram, "uTime"),
+        solar: gl.getUniformLocation(this.skyProgram, "uSolar"),
+        aspect: gl.getUniformLocation(this.skyProgram, "uAspect"),
+      },
+      snow: {
+        weather: gl.getUniformLocation(this.snowProgram, "uWeather"),
+        night: gl.getUniformLocation(this.snowProgram, "uNight"),
+      },
+      glow: {
+        offset: gl.getUniformLocation(this.glowProgram, "uOffsetZ"),
+        night: gl.getUniformLocation(this.glowProgram, "uNight"),
+      },
+    };
+    this.upload(this.data.farMesh);
     this.upload(this.world);
     this.upload(this.starMesh);
     const visit = (node: ModelPart) => {
@@ -398,22 +437,27 @@ export class SleighScene {
     for (const batch of this.forest) batch.count = 0;
     const source = this.data.trees,
       maxDistance = this.width < 650 ? 1450 : 2000;
-    for (let i = 0; i < source.length; i += 6) {
-      const forward = -source[i + 2] - state.distance;
-      if (forward < -65 || forward > maxDistance) continue;
-      const distance = Math.hypot(source[i] - state.x, forward);
-      if (distance > maxDistance) continue;
-      const lod =
-        distance < (this.width < 650 ? 58 : 75)
-          ? 0
-          : distance < (this.width < 650 ? 180 : 235)
-            ? 1
-            : distance < (this.width < 650 ? 370 : 560)
-              ? 2
-              : 3;
-      const batch = this.forest[lod * 2 + source[i + 5]];
-      const offset = batch.count++ * 5;
-      for (let j = 0; j < 5; j++) batch.data[offset + j] = source[i + j];
+    for (const tile of visibleTiles(state.distance, maxDistance, 65)) {
+      const offsetZ = -tile * WORLD_TILE_LENGTH;
+      for (let i = 0; i < source.length; i += 6) {
+        const z = source[i + 2] + offsetZ,
+          forward = -z - state.distance;
+        if (forward < -65 || forward > maxDistance) continue;
+        const distance = Math.hypot(source[i] - state.x, forward);
+        if (distance > maxDistance) continue;
+        const lod =
+          distance < (this.width < 650 ? 58 : 75)
+            ? 0
+            : distance < (this.width < 650 ? 180 : 235)
+              ? 1
+              : distance < (this.width < 650 ? 370 : 560)
+                ? 2
+                : 3;
+        const batch = this.forest[lod * 2 + source[i + 5]],
+          offset = batch.count++ * 5;
+        for (let j = 0; j < 5; j++) batch.data[offset + j] = source[i + j];
+        batch.data[offset + 2] = z;
+      }
     }
     const gl = this.gl;
     for (const batch of this.forest) {
@@ -465,6 +509,7 @@ export class SleighScene {
         gl.uniformMatrix4fv(this.depthModel, false, identity());
       } else {
         this.attributes(gpu);
+        gl.uniform1i(this.uniforms.localMaterial, 1);
         gl.uniformMatrix4fv(this.uniforms.model, false, identity());
       }
       gl.bindBuffer(gl.ARRAY_BUFFER, batch.buffer);
@@ -493,9 +538,31 @@ export class SleighScene {
       dt = Math.max(0, Math.min(0.1, time - this.lastTime));
     this.lastTime = time;
     const narrow = this.width < 650;
+    const environment = getEnvironment(state.elapsed, options);
+    const environmentVector = [
+      environment.daylight,
+      environment.night,
+      environment.aurora,
+      environment.cloudCover,
+    ];
+    const weatherVector = [
+      environment.snowfall,
+      environment.windX,
+      environment.windZ,
+      environment.fogDensity * 1000,
+    ];
+    const space = journeySpace(state.distance, this.renderOrigin);
+    const rendering = { ...state, distance: space.distance };
     const restarted =
       this.lastDistance < 0 || state.distance < this.lastDistance;
-    const pose = cameraPose(state, narrow, restarted ? null : this.camera, dt);
+    if (!restarted) this.camera[2] += space.originDelta;
+    this.renderOrigin = space.origin;
+    const pose = cameraPose(
+      rendering,
+      narrow,
+      restarted ? null : this.camera,
+      dt,
+    );
     this.camera = pose.eye;
     this.lastDistance = state.distance;
     const target = pose.target;
@@ -529,8 +596,12 @@ export class SleighScene {
     const light = multiply(
       ortho,
       lookAt(
-        [state.x - 110, 180, -state.distance + 85],
-        [state.x, 0, -state.distance - 35],
+        [
+          state.x + environment.lightDirection[0] * 280,
+          environment.lightDirection[1] * 280,
+          -rendering.distance - 35 + environment.lightDirection[2] * 280,
+        ],
+        [state.x, 0, -rendering.distance - 35],
       ),
     );
     const previous = this.previousFlight;
@@ -551,8 +622,14 @@ export class SleighScene {
     if (restarted || (state.phase === "ready" && previous?.phase !== "ready"))
       this.rig.reset(time);
     this.previousFlight = state;
-    this.prepareForest(state);
-    this.rig.root.position = [state.x, state.altitude, -state.distance];
+    if (state.phase === "flying") {
+      movement.lateralVelocity +=
+        Math.sin(time * 1.7) * environment.snowfall * 2.5;
+      movement.forwardAcceleration +=
+        Math.sin(time * 1.1) * environment.snowfall * 1.5;
+    }
+    this.prepareForest(rendering);
+    this.rig.root.position = [state.x, state.altitude, -rendering.distance];
     this.rig.update(
       time,
       state.speed,
@@ -570,7 +647,12 @@ export class SleighScene {
     for (let i = 0; i < 8; i++) gl.disableVertexAttribArray(i);
     gl.useProgram(this.depthProgram);
     gl.uniformMatrix4fv(this.depthLight, false, light);
-    this.drawMesh(this.world, identity(), true);
+    for (const tile of visibleTiles(rendering.distance, 400, 200))
+      this.drawMesh(
+        this.world,
+        transform([0, 0, -tile * WORLD_TILE_LENGTH]),
+        true,
+      );
     this.drawForest(true);
     this.drawPart(this.rig.root, identity(), true);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -581,6 +663,15 @@ export class SleighScene {
     gl.disable(gl.DEPTH_TEST);
     for (let i = 0; i < 8; i++) gl.disableVertexAttribArray(i);
     gl.useProgram(this.skyProgram);
+    gl.uniform4fv(this.climate.sky.environment, environmentVector);
+    gl.uniform4fv(this.climate.sky.weather, weatherVector);
+    gl.uniform1f(this.climate.sky.time, options.gentle ? time * 0.25 : time);
+    gl.uniform2f(
+      this.climate.sky.solar,
+      environment.sunHeight,
+      environment.phase,
+    );
+    gl.uniform1f(this.climate.sky.aspect, this.width / this.height);
     const horizontal = Math.hypot(
       this.camera[0] - target[0],
       this.camera[2] - target[2],
@@ -603,6 +694,9 @@ export class SleighScene {
     gl.uniformMatrix4fv(this.uniforms.viewProjection, false, viewProjection);
     gl.uniformMatrix4fv(this.uniforms.view, false, view);
     gl.uniform3fv(this.uniforms.camera, this.camera);
+    gl.uniform4fv(this.climate.surface.environment, environmentVector);
+    gl.uniform4fv(this.climate.surface.weather, weatherVector);
+    gl.uniform3fv(this.climate.surface.direction, environment.lightDirection);
     gl.uniformMatrix4fv(this.uniforms.light, false, light);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.shadowTexture);
@@ -610,33 +704,59 @@ export class SleighScene {
     gl.uniform3fv(this.uniforms.lantern, [
       state.x + 4,
       state.altitude + 7,
-      -state.distance + 5,
+      -rendering.distance + 5,
     ]);
     const lights = this.data.lights;
-    const closest: Array<{ offset: number; distance: number }> = [];
-    for (let i = 0; i < lights.length; i += 4) {
-      const distance =
-        (lights[i] - state.x) ** 2 +
-        (lights[i + 1] - state.altitude * 0.3) ** 2 +
-        (lights[i + 2] + state.distance) ** 2;
-      closest.push({ offset: i, distance });
-    }
+    const closest: Array<{
+      x: number;
+      y: number;
+      z: number;
+      strength: number;
+      distance: number;
+    }> = [];
+    for (const tile of visibleTiles(rendering.distance, 600, 300))
+      for (let i = 0; i < lights.length; i += 4) {
+        const z = lights[i + 2] - tile * WORLD_TILE_LENGTH;
+        const distance =
+          (lights[i] - state.x) ** 2 +
+          (lights[i + 1] - state.altitude * 0.3) ** 2 +
+          (z + rendering.distance) ** 2;
+        closest.push({
+          x: lights[i],
+          y: lights[i + 1],
+          z,
+          strength: lights[i + 3],
+          distance,
+        });
+      }
     closest.sort((a, b) => a.distance - b.distance);
     for (let i = 0; i < 6; i++) {
-      const source = closest[i]?.offset;
-      if (source === undefined) {
+      const light = closest[i];
+      if (!light) {
         this.warmLightData.fill(0, i * 4, i * 4 + 4);
         continue;
       }
-      for (let j = 0; j < 4; j++)
-        this.warmLightData[i * 4 + j] = lights[source + j];
+      this.warmLightData.set(
+        [light.x, light.y, light.z, light.strength],
+        i * 4,
+      );
     }
     gl.uniform4fv(this.warmLightLocation, this.warmLightData);
-    this.drawMesh(this.world, identity());
+    const tiles = visibleTiles(rendering.distance, 5600, 100);
+    for (const tile of tiles) {
+      const detailed = tile * WORLD_TILE_LENGTH - rendering.distance < 1200;
+      this.drawMesh(
+        detailed ? this.world : this.data.farMesh,
+        transform([0, 0, -tile * WORLD_TILE_LENGTH]),
+        false,
+        true,
+      );
+    }
     this.drawForest();
     this.drawPart(this.rig.root, identity(), false, true);
     if (state.phase !== "ready" && state.nextGate < this.stars.length) {
       const star = this.stars[state.nextGate];
+      star.position[2] = -(STAR_GATES[state.nextGate].distance - space.origin);
       star.rotation[2] = Math.sin(time * 0.8) * 0.06;
       this.drawPart(star, identity());
     }
@@ -650,10 +770,15 @@ export class SleighScene {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
     gl.depthMask(false);
-    gl.drawArrays(gl.POINTS, 0, this.data.lights.length / 4);
+    gl.uniform1f(this.climate.glow.night, environment.night);
+    for (const tile of tiles) {
+      if (tile * WORLD_TILE_LENGTH - rendering.distance > 1200) continue;
+      gl.uniform1f(this.climate.glow.offset, -tile * WORLD_TILE_LENGTH);
+      gl.drawArrays(gl.POINTS, 0, this.data.lights.length / 4);
+    }
     gl.depthMask(true);
     gl.disable(gl.BLEND);
-    if (options.snow) {
+    if (options.snow && environment.snowfall > 0.001) {
       for (let i = 0; i < 8; i++) gl.disableVertexAttribArray(i);
       gl.useProgram(this.snowProgram);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.snowBuffer);
@@ -668,15 +793,21 @@ export class SleighScene {
       gl.uniform3fv(this.snowUniforms.origin, [
         state.x,
         state.altitude,
-        -state.distance,
+        -rendering.distance,
       ]);
       gl.uniform1f(this.snowUniforms.time, time);
       gl.uniform1f(this.snowUniforms.travel, state.distance);
       gl.uniform1f(this.snowUniforms.pixelRatio, this.ratio);
+      gl.uniform4fv(this.climate.snow.weather, weatherVector);
+      gl.uniform1f(this.climate.snow.night, environment.night);
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       gl.depthMask(false);
-      gl.drawArrays(gl.POINTS, 0, 450);
+      gl.drawArrays(
+        gl.POINTS,
+        0,
+        Math.round(environment.snowfall * (narrow ? 1900 : 2600)),
+      );
       gl.depthMask(true);
       gl.disable(gl.BLEND);
     }

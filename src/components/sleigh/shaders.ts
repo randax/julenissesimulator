@@ -1,3 +1,5 @@
+import { WORLD_TILE_LENGTH } from "./route.ts";
+const CYCLE = (Math.PI * 2) / WORLD_TILE_LENGTH;
 const INSTANCE = `
  attribute vec4 aInstance;
  attribute float aAngle;
@@ -27,7 +29,7 @@ export const VERTEX = `
 export const FRAGMENT = `
  precision highp float;
  varying vec3 vColour;varying vec3 vNormal;varying vec3 vWorld;varying vec3 vSurface;varying float vDepth;varying float vEmission;varying vec4 vShadow;
- uniform vec3 uLantern;uniform vec3 uCamera;uniform sampler2D uShadowMap;uniform vec4 uWarmLights[6];
+ uniform vec3 uLantern;uniform vec3 uCamera;uniform sampler2D uShadowMap;uniform vec4 uWarmLights[6];uniform vec4 uEnvironment;uniform vec4 uWeather;uniform vec3 uLightDirection;
  ${NOISE}
  float unpackDepth(vec4 value){return dot(value,vec4(1.0/16777216.0,1.0/65536.0,1.0/256.0,1.0))*(255.0/256.0);}
  float visibility(vec3 normal){
@@ -46,10 +48,14 @@ export const FRAGMENT = `
   float grain=noise(vSurface.xz*8.0+vSurface.y*.53);
   vec3 detail=vec3(noise(vSurface.xy*4.7)-.5,0.0,noise(vSurface.zy*4.7)-.5);
   normal=normalize(normal+detail*snow*.065*close);
-  vec3 lightDirection=normalize(vec3(-.53,.73,.42));
+  vec3 lightDirection=normalize(uLightDirection);
   float sunlight=max(dot(normal,lightDirection),0.0)*visibility(normal);
   float skylight=max(normal.y,0.0);
-  vec3 lighting=vec3(.32,.39,.54)+sunlight*vec3(.50,.43,.39)+skylight*vec3(.13,.17,.23);
+  vec3 ambient=mix(vec3(.045,.067,.12),vec3(.34,.42,.55),uEnvironment.x);
+  vec3 direct=mix(vec3(.13,.19,.32),vec3(.55,.48,.40),uEnvironment.x)*(1.0-uEnvironment.w*.48);
+  vec3 skyLight=mix(vec3(.025,.045,.085),vec3(.14,.18,.24),uEnvironment.x);
+  vec3 lighting=ambient+sunlight*direct+skylight*skyLight;
+  lighting+=vec3(.018,.047,.038)*uEnvironment.z*skylight;
   vec3 lamp=uLantern-vWorld;
   float warmth=max(dot(normal,normalize(lamp)),0.0)*min(.7,16.0/max(dot(lamp,lamp),1.0));
   lighting+=vec3(1.0,.62,.26)*warmth;
@@ -62,8 +68,8 @@ export const FRAGMENT = `
   lighting+=vec3(1.0,.46,.10)*min(localWarmth,.68);
   vec3 albedo=vColour;
   // These coordinates share the terrain's winding stream and village path.
-  float riverCenter=sin(vWorld.z*.010)*10.0+sin(vWorld.z*.003)*8.0;
-  float roadCenter=riverCenter+14.0+sin(vWorld.z*.012+.5)*7.0;
+  float riverCenter=sin(vWorld.z*${CYCLE.toFixed(12)}*3.0)*10.0+sin(vWorld.z*${CYCLE.toFixed(12)})*8.0;
+  float roadCenter=riverCenter+14.0+sin(vWorld.z*${CYCLE.toFixed(12)}*5.0+.5)*7.0;
   float ground=snow*(1.0-smoothstep(6.0,8.0,vWorld.y))*smoothstep(.65,.9,normal.y);
   float river=(1.0-smoothstep(1.9,2.4,abs(vWorld.x-riverCenter)))*ground;
   float road=(1.0-smoothstep(5.5,7.0,abs(vWorld.x-roadCenter)))*ground;
@@ -72,7 +78,7 @@ export const FRAGMENT = `
   albedo*=1.0-track*road*.11;
   albedo=mix(albedo,vec3(.47,.60,.74),river*.82);
   float rock=step(.28,vColour.b)*(1.0-smoothstep(.60,.79,vColour.r))*(1.0-snow);
-  albedo*=1.0+rock*(fbm(vWorld.xz*.18+vWorld.y*.35)-.5)*.22;
+  albedo*=1.0+rock*(fbm(vSurface.xz*.18+vSurface.y*.35)-.5)*.22;
   albedo*=1.0+snow*(grain-.5)*.065*close;
   float wood=step(.04,vColour.r-vColour.b)*(1.0-snow)*(1.0-smoothstep(.65,.79,vColour.r));
   float along=abs(normal.z)>abs(normal.x)?vSurface.x:vSurface.z;
@@ -86,11 +92,12 @@ export const FRAGMENT = `
   lit+=vec3(.12,.14,.18)*sparkle*snow*close;
   float metal=step(.66,vColour.r)*(1.0-smoothstep(.50,.60,vColour.b))*step(.40,vColour.g)*(1.0-step(.5,vEmission));
   lit+=vec3(.32,.24,.14)*pow(max(dot(normal,normalize(lightDirection+viewDirection)),0.0),44.0)*metal;
-  float distanceFog=1.0-exp(-vDepth*.00050);
+  float distanceFog=1.0-exp(-vDepth*uWeather.w*.001);
   float valleyMist=exp(-max(vWorld.y,0.0)*.022)*(1.0-exp(-vDepth*.003))* (.09+fbm(vWorld.xz*.003)*.17);
   float hangingMist=exp(-pow((vWorld.y-55.0)/55.0,2.0))*(1.0-exp(-vDepth*.002))*.16;
   float fog=clamp(distanceFog+valleyMist+hangingMist,0.0,.96);
   vec3 fogColour=mix(vec3(.59,.68,.81),vec3(.65,.71,.82),smoothstep(60.0,300.0,vWorld.y));
+  fogColour=mix(vec3(.035,.055,.11),fogColour,uEnvironment.x);
   vec3 result=mix(lit,fogColour,fog);
   gl_FragColor=vec4(pow(max(result,vec3(0.0)),vec3(.94)),1.0);
  }
@@ -99,27 +106,64 @@ export const DEPTH_VERTEX = `attribute vec3 aPosition;uniform mat4 uModel;unifor
 export const DEPTH_FRAGMENT = `precision highp float;void main(){vec4 encoded=fract(gl_FragCoord.z*vec4(16777216.0,65536.0,256.0,1.0));encoded-=encoded.xxyz*vec4(0.0,1.0/256.0,1.0/256.0,1.0/256.0);gl_FragColor=encoded*(256.0/255.0);}`;
 export const SKY_VERTEX = `attribute vec2 aPosition;varying vec2 vUv;void main(){vUv=aPosition*.5+.5;gl_Position=vec4(aPosition,1.0,1.0);}`;
 export const SKY_FRAGMENT = `
- precision highp float;varying vec2 vUv;uniform float uHorizon;
+ precision highp float;varying vec2 vUv;uniform float uHorizon;uniform float uAspect;uniform float uTime;uniform vec2 uSolar;uniform vec4 uEnvironment;uniform vec4 uWeather;
  ${NOISE}
  void main(){
   float height=clamp((vUv.y-uHorizon)/max(1.0-uHorizon,.1),0.0,1.0);
-  vec3 sky=mix(vec3(.69,.73,.84),vec3(.38,.53,.72),smoothstep(0.0,1.0,height));
-  float sunset=exp(-pow((vUv.y-uHorizon-.035)*9.5,2.0))*exp(-pow((vUv.x-.35)*1.35,2.0));
-  sky+=vec3(.22,.055,-.035)*sunset;
+  float day=uEnvironment.x,night=uEnvironment.y,cloudCover=uEnvironment.w;
+  vec3 daySky=mix(vec3(.70,.81,.94),vec3(.27,.49,.79),smoothstep(0.0,1.0,height));
+  vec3 nightSky=mix(vec3(.035,.065,.14),vec3(.006,.014,.045),height);
+  vec3 sky=mix(nightSky,daySky,day);
+  float twilight=exp(-abs(uSolar.x)*6.0);
+  float sunset=exp(-pow((vUv.y-uHorizon-.025)*9.5,2.0))*exp(-pow((vUv.x-.35)*1.35,2.0))*twilight;
+  sky+=vec3(.34,.10,.025)*sunset;
+  vec2 celestial=vec2(.73,uHorizon+.10+max(-uSolar.x,0.0)*.17);
+  vec2 moonDelta=(vUv-celestial)*vec2(uAspect,1.0);
+  float moonDistance=length(moonDelta);
+  float moon=(1.0-smoothstep(.013,.017,moonDistance))*night;
+  sky+=vec3(.62,.72,.92)*moon;
+  sky+=vec3(.08,.12,.22)*exp(-moonDistance*18.0)*night;
   if(vUv.y>uHorizon-.08){
-   vec2 p=vec2(vUv.x*7.0,vUv.y*21.0);
-   float cloud=fbm(p+vec2(fbm(p*.35)*2.0,0.0));
-   float opacity=smoothstep(.36,.68,cloud)*smoothstep(uHorizon-.08,uHorizon+.15,vUv.y)*.65;
-   vec3 cloudColour=mix(vec3(.55,.65,.79),vec3(.89,.83,.85),smoothstep(.35,.75,cloud));
-   sky=mix(sky,cloudColour,opacity);
+    vec2 p=vec2(vUv.x*7.0+uTime*.003,vUv.y*21.0+uTime*.0006);
+    float cloud=fbm(p+vec2(fbm(p*.35)*2.0,0.0));
+    float opacity=smoothstep(.25,.72,cloud)*smoothstep(uHorizon-.08,uHorizon+.15,vUv.y)*cloudCover*.95;
+    vec3 cloudColour=mix(vec3(.05,.08,.14),mix(vec3(.50,.59,.71),vec3(.89,.85,.84),smoothstep(.35,.75,cloud)),day);
+    sky=mix(sky,cloudColour,opacity);
+    vec2 starGrid=vUv*vec2(430.0*uAspect,430.0),cell=floor(starGrid),local=fract(starGrid)-.5;
+    float starSeed=hash(cell);
+    float stars=step(.9974,starSeed)*exp(-length(local)*18.0)*(.8+.2*sin(uTime*.5+starSeed*110.0));
+    sky+=vec3(.68,.80,1.0)*stars*night*(1.0-opacity)*smoothstep(uHorizon+.02,uHorizon+.20,vUv.y);
+    if(uEnvironment.z>.01){
+      vec3 aurora=vec3(0.0);
+      for(int layer=0;layer<3;layer++){
+        float l=float(layer),x=vUv.x;
+        float base=uHorizon+.075+l*.045+sin(x*5.8+uTime*.075+l*1.7)*.046+sin(x*13.0-uTime*.045+l)*.016;
+        float rise=vUv.y-base;
+        float folds=.28+.72*pow(noise(vec2(x*86.0+sin(x*13.0+uTime*.08)*2.0,uTime*.035+l*9.0)),2.0);
+        float curtain=smoothstep(-.006,.018,rise)*(1.0-smoothstep(.065,.24,rise))*exp(-max(rise,0.0)*5.0)*folds*.47;
+        float edge=exp(-abs(rise)*155.0)*.19;
+        vec3 lower=mix(vec3(.09,.91,.40),vec3(.03,.64,.88),l*.30);
+        vec3 colour=mix(lower,vec3(.43,.16,.78),smoothstep(.08,.22,rise));
+        float span=smoothstep(.0,.12,x)*(1.0-smoothstep(.91,1.0,x));
+        aurora+=colour*(curtain+edge)*span;
+      }
+      sky+=aurora*uEnvironment.z*(1.0-opacity*.75);
+    }
   }
+  sky=mix(sky,sky*.74+vec3(.045,.055,.07),cloudCover*.24);
   gl_FragColor=vec4(sky,1.0);
  }
 `;
 export const SNOW_VERTEX = `
- attribute vec3 aSeed;uniform mat4 uViewProjection;uniform vec3 uOrigin;uniform float uTravel;uniform float uTime;uniform float uPixelRatio;varying float vAlpha;
- void main(){vec3 p=vec3(aSeed.x*100.0-50.0,mod(aSeed.y*65.0-uTime*4.0,65.0)-22.0,mod(aSeed.z*130.0+uTravel,130.0)-95.0);p.x+=sin(uTime*.4+aSeed.z*20.0)*2.0;vec4 clip=uViewProjection*vec4(p+uOrigin,1.0);gl_Position=clip;gl_PointSize=clamp(110.0/max(clip.w,1.0),1.2,4.0)*uPixelRatio;vAlpha=.22+aSeed.y*.42;}
+ attribute vec3 aSeed;uniform mat4 uViewProjection;uniform vec3 uOrigin;uniform float uTravel;uniform float uTime;uniform float uPixelRatio;uniform vec4 uWeather;varying float vAlpha;
+ void main(){
+  vec3 p=vec3(mod(aSeed.x*100.0+uTime*uWeather.y*.8,100.0)-50.0,mod(aSeed.y*65.0-uTime*(3.0+uWeather.x*4.0),65.0)-22.0,mod(aSeed.z*130.0+uTravel+uTime*uWeather.z,130.0)-95.0);
+  p.x+=sin(uTime*.4+aSeed.z*20.0)*2.0;
+  vec4 clip=uViewProjection*vec4(p+uOrigin,1.0);gl_Position=clip;
+  gl_PointSize=clamp((130.0+uWeather.x*65.0)/max(clip.w,1.0),1.6,4.0+uWeather.x*2.0)*uPixelRatio;
+  vAlpha=(.28+aSeed.y*.58)*(.45+uWeather.x*.55);
+ }
 `;
-export const SNOW_FRAGMENT = `precision mediump float;varying float vAlpha;void main(){float a=1.0-smoothstep(.15,.5,length(gl_PointCoord-.5));gl_FragColor=vec4(.94,.96,1.0,a*vAlpha);}`;
-export const GLOW_VERTEX = `attribute vec4 aGlow;uniform mat4 uViewProjection;uniform float uPixelRatio;varying float vAlpha;void main(){vec4 clip=uViewProjection*vec4(aGlow.xyz,1.0);gl_Position=clip;gl_PointSize=clamp(1100.0*aGlow.w/max(clip.w,1.0),2.0,95.0)*uPixelRatio;vAlpha=.20;}`;
+export const SNOW_FRAGMENT = `precision highp float;varying float vAlpha;uniform float uNight;uniform vec4 uWeather;void main(){vec2 p=gl_PointCoord-.5;p.x+=p.y*uWeather.y*.035;float a=1.0-smoothstep(.12,.5,length(p*vec2(1.25,.78)));gl_FragColor=vec4(mix(vec3(.94,.96,1.0),vec3(.72,.81,.96),uNight),a*vAlpha);}`;
+export const GLOW_VERTEX = `attribute vec4 aGlow;uniform mat4 uViewProjection;uniform float uPixelRatio;uniform float uOffsetZ;uniform float uNight;varying float vAlpha;void main(){vec4 clip=uViewProjection*vec4(aGlow.xyz+vec3(0.0,0.0,uOffsetZ),1.0);gl_Position=clip;gl_PointSize=clamp(1100.0*aGlow.w/max(clip.w,1.0),2.0,95.0)*uPixelRatio;vAlpha=.15+uNight*.16;}`;
 export const GLOW_FRAGMENT = `precision mediump float;varying float vAlpha;void main(){float radius=length(gl_PointCoord-.5)*2.0;float glow=exp(-radius*radius*5.0)*(1.0-smoothstep(.2,1.0,radius));gl_FragColor=vec4(1.0,.46,.09,glow*vAlpha);}`;

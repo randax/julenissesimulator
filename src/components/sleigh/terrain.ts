@@ -5,6 +5,7 @@ import {
   type Colour,
   type Vec3,
 } from "./geometry.ts";
+import { WORLD_TILE_LENGTH } from "./route.ts";
 
 const snow = colour(0xd9e3f0);
 const pearl = colour(0xe8eaf0);
@@ -32,13 +33,31 @@ function noise(x: number, z: number): number {
 }
 const mix = (a: Colour, b: Colour, amount: number): Colour =>
   a.map((v, index) => v + (b[index] - v) * amount) as Colour;
+const tilePhase = (z: number) => (z / WORLD_TILE_LENGTH) * Math.PI * 2;
 export const streamCenter = (z: number) =>
-  Math.sin(z * 0.01) * 10 + Math.sin(z * 0.003) * 8;
+  Math.sin(tilePhase(z) * 3) * 10 + Math.sin(tilePhase(z)) * 8;
 export const pathCenter = (z: number) =>
-  streamCenter(z) + 14 + Math.sin(z * 0.012 + 0.5) * 7;
+  streamCenter(z) + 14 + Math.sin(tilePhase(z) * 5 + 0.5) * 7;
+
+/** Quintic blending matches values and first derivatives at both tile edges. */
+function periodicSample(z: number, sample: (localZ: number) => number): number {
+  const localZ = -(
+    ((-z % WORLD_TILE_LENGTH) + WORLD_TILE_LENGTH) %
+    WORLD_TILE_LENGTH
+  );
+  const t = -localZ / WORLD_TILE_LENGTH;
+  const blend = t * t * t * (t * (t * 6 - 15) + 10);
+  return (
+    sample(localZ) * (1 - blend) + sample(localZ + WORLD_TILE_LENGTH) * blend
+  );
+}
+
+export function terrainHeight(x: number, z: number): number {
+  return periodicSample(z, (localZ) => rawHeight(x, localZ));
+}
 
 /** A low flying corridor opens between cliff-backed, snow-laden valley sides. */
-export function terrainHeight(x: number, z: number): number {
+function rawHeight(x: number, z: number): number {
   const channel = Math.abs(x - streamCenter(z));
   const gentle =
     1.45 +
@@ -73,17 +92,11 @@ export function terrainHeight(x: number, z: number): number {
       summits * smooth(65, 250, edge) +
       erosion * smooth(0, 65, edge),
   );
-  const far =
-    smooth(1980, 2900, -z) *
-      (135 +
-        noise(x * 0.005, z * 0.004) * 100 +
-        Math.pow(Math.abs(Math.sin(x * 0.006 + z * 0.0013)), 2) * 105) +
-    smooth(3200, 3980, -z) * (65 + noise(x * 0.004, z * 0.005) * 80);
   const drift =
     smooth(22, 120, Math.abs(x)) *
     (noise(x * 0.025, z * 0.025) * 1.6 +
       Math.sin(z * 0.017 + x * 0.021) * 0.65);
-  return gentle + bank - bed + drift + cliff + far;
+  return gentle + bank - bed + drift + cliff;
 }
 
 function normalAt(x: number, z: number): Vec3 {
@@ -104,16 +117,19 @@ function terrainTint(
     y = (a[1] + b[1] + c[1]) / 3,
     z = (a[2] + b[2] + c[2]) / 3;
   const up = (normals[0][1] + normals[1][1] + normals[2][1]) / 3;
-  const ledges =
-    0.8 +
-    Math.sin(y * 0.12 + x * 0.03 + z * 0.015) * 0.22 +
-    (noise(x * 0.06, z * 0.045) - 0.5) * 0.32;
+  const ledges = periodicSample(
+    z,
+    (localZ) =>
+      0.8 +
+      Math.sin(y * 0.12 + x * 0.03 + localZ * 0.015) * 0.22 +
+      (noise(x * 0.06, localZ * 0.045) - 0.5) * 0.32,
+  );
   const exposed = clamp(smooth(0.12, 0.5, 1 - up) * smooth(15, 55, y) * ledges);
   const base = mix(snow, pearl, smooth(0.65, 1, up) * 0.37);
   return mix(base, rock, exposed);
 }
 
-export function addTerrain(mesh: MeshBuilder): void {
+export function addTerrain(mesh: MeshBuilder, distant = false): void {
   const positiveX: number[] = [];
   for (let x = 0; x <= 184; x += 8) positiveX.push(x);
   for (let x = 192; x <= 600; x += 8) positiveX.push(x);
@@ -126,8 +142,9 @@ export function addTerrain(mesh: MeshBuilder): void {
     ...positiveX,
   ];
   const zSteps: number[] = [];
-  for (let z = 180; z >= -2208; z -= 12) zSteps.push(z);
-  for (let z = -2248; z >= -4350; z -= 48) zSteps.push(z);
+  const longitudinalStep = distant ? 48 : 12;
+  for (let z = 0; z > -WORLD_TILE_LENGTH; z -= longitudinalStep) zSteps.push(z);
+  zSteps.push(-WORLD_TILE_LENGTH);
   const points = zSteps.map((z) =>
     xSteps.map((x) => [x, terrainHeight(x, z), z] as Vec3),
   );
@@ -162,11 +179,12 @@ export function addTerrain(mesh: MeshBuilder): void {
     }
   }
   // Ice and compressed tracks are shaded directly on this continuous surface.
+  if (distant) return;
   // Half-buried stones retain a visible dark underside beneath thick rounded caps.
   for (let index = 0; index < 88; index++) {
     const side = index % 2 ? -1 : 1;
     const x = side * (31 + hash(index, 5) * 130),
-      z = 90 - hash(index, 17) * 2250;
+      z = -16 - hash(index, 17) * (WORLD_TILE_LENGTH - 32);
     const radius = 1.8 + hash(index, 21) * 4.3;
     const y = terrainHeight(x, z);
     mesh.ellipsoid(

@@ -1,3 +1,6 @@
+import { ROUTE_LENGTH, STAR_GATES } from "./route.ts";
+export { ROUTE_LENGTH, STAR_GATES, type StarGate } from "./route.ts";
+
 export type FlightPhase = "ready" | "flying" | "paused" | "complete";
 
 export interface FlightInput {
@@ -25,29 +28,12 @@ export interface FlightState {
   outcome: null | "arrived" | "crashed";
 }
 
-export interface StarGate {
-  distance: number;
-  x: number;
-  altitude: number;
-}
-
-export const ROUTE_LENGTH = 1800;
 export const FLIGHT_SPEEDS = {
   launch: 180,
   cruise: 230,
   boost: 340,
   brake: 100,
 } as const;
-export const STAR_GATES: readonly StarGate[] = [
-  { distance: 180, x: 0, altitude: 35 },
-  { distance: 390, x: -35, altitude: 45 },
-  { distance: 600, x: 40, altitude: 60 },
-  { distance: 810, x: 0, altitude: 80 },
-  { distance: 1020, x: -55, altitude: 65 },
-  { distance: 1230, x: 45, altitude: 50 },
-  { distance: 1440, x: 20, altitude: 70 },
-  { distance: 1650, x: 0, altitude: 35 },
-];
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));

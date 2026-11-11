@@ -20,9 +20,17 @@ Open http://localhost:3000. For the production static demo, run `npm run build` 
 - **P / Escape:** pause and resume.
 - On touchscreens, hold the on-screen directional and speed controls.
 
-The sleigh launches at 180 km/h and accelerates smoothly to a 230 km/h cruise. A straight 1.8 km route takes about 29 seconds at cruise or 20 seconds with sustained boost. Steering and climb rates are tuned for the faster pace. The sleigh banks into turns, pitches during climbs/descents, and settles with damped body motion; passengers brace while keeping their gaze forward.
+The sleigh launches at 180 km/h and accelerates smoothly to a 230 km/h cruise. The 18 km journey takes about 4 minutes 42 seconds at cruise or 3 minutes 11 seconds with sustained boost. Steering and climb rates are tuned for the faster pace. The sleigh banks into turns, pitches during climbs/descents, and settles with damped body motion; passengers brace while keeping their gaze forward.
 
-Collect eight stars along the route. Stay above the ground and inside the valley; the sleigh has three lives. Flight ends on arrival or when all lives are lost. Sound is opt-in and generated locally with Web Audio. Leaving the browser tab automatically pauses the flight. The calm-movement setting reduces these body movements to a quarter of their usual amplitude.
+Collect 60 stars along six route waypoints. Stay above the ground and inside the valley; the sleigh has three lives. Flight ends on arrival or when all lives are lost. Sound is opt-in and generated locally with Web Audio. Leaving the browser tab automatically pauses the flight. The calm-movement setting reduces these body movements to a quarter of their usual amplitude.
+
+## Weather and daylight
+
+Automatic mode follows an accelerated 180-second day: the flight starts in the afternoon, moves through dusk and night, and returns to daylight. Clear nights show animated northern lights, stars and a moon. Weather changes smoothly between clear air, flurries and wind-driven snow showers, changing clouds, visibility, wind audio and a little sleigh buffeting.
+
+Settings can also hold the world in **day** or **night**, and select **clear**, **snow**, or **showers**. The particle switch independently hides flakes. Pausing freezes the simulation clock, daylight, weather and aurora animation. Restarting resets the journey clock.
+
+The detailed valley is reused as seamless 2.4 km terrain tiles, with shared neighboring geometry, coarse far ridges and camera-coordinate rebasing. The renderer does not build an 18 km mesh or accumulate geometry as you travel.
 
 ## Integrate with nissekomm
 
@@ -37,12 +45,15 @@ npm test
 npm run build
 ```
 
-The 39 tests cover forward-facing passengers, damped banking/pitching, motion settling/pause/reset, rear-camera alignment at takeoff and during steering, 3D transforms, projection, surface normals, articulated animation, animation pause/speed transitions, and simulation lifecycle, frame timing, star collection/misses, collision protection, crash, arrival, bounded controls, sustained flight speeds and duration, and acceleration/braking. Browser verification should include desktop/mobile rendering, visible articulated reindeer motion, steering, pause/resume, modal keyboard focus, route display, and settings.
+The 54 tests cover forward-facing passengers, damped banking/pitching, motion settling/pause/reset, rear-camera alignment at takeoff and during steering, 3D transforms, projection, surface normals, articulated animation, animation pause/speed transitions, and simulation lifecycle, frame timing, star collection/misses, collision protection, crash, arrival, bounded controls, sustained flight speeds and duration, and acceleration/braking. Browser verification should include desktop/mobile rendering, visible articulated reindeer motion, steering, pause/resume, modal keyboard focus, route display, and settings.
 
 ## Implementation
 
 - `src/components/sleigh/SleighSimulator.tsx`: client UI, input, focus management, and animation lifecycle.
 - `flight.ts`: deterministic immutable simulation and shared speed constants, independent of React and rendering.
+- `route.ts`: 18 km distance, 60 gates, waypoints and shared terrain period.
+- `environment.ts`: deterministic weather/daylight/aurora state from elapsed flight time.
+- `journey-space.ts`: bounded GPU coordinates and neighboring tile selection.
 - `geometry.ts`: 3D geometry and matrix helpers.
 - `world.ts`: village layout, shared forest geometry, tree placement and warm-light positions.
 - `terrain.ts`: smooth drifted terrain, rocky mountain ridges, stream and path coordinates.

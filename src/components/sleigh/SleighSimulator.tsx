@@ -19,6 +19,8 @@ import {
   type FlightState,
 } from "./flight";
 import { SleighScene } from "./scene";
+import { getEnvironment, type TimeMode, type WeatherMode } from "./environment";
+import { ROUTE_STOPS, routeStopAt } from "./route";
 import { SleighAudio } from "./audio";
 import { Icon, JuliusPortrait } from "./icons";
 import "./sleigh.css";
@@ -101,7 +103,12 @@ export default function SleighSimulator({
     keys = useRef(new Set<string>()),
     touch = useRef<FlightInput>({ ...neutral });
   const soundRef = useRef<SleighAudio | null>(null),
-    optionsRef = useRef({ snow: true, gentle: false });
+    optionsRef = useRef({
+      snow: true,
+      gentle: false,
+      timeMode: "auto" as TimeMode,
+      weatherMode: "auto" as WeatherMode,
+    });
   const callbackRef = useRef(onComplete);
   const [flight, setFlight] = useState(createFlight),
     [sound, setSound] = useState(false),
@@ -110,6 +117,8 @@ export default function SleighSimulator({
     [snow, setSnow] = useState(true),
     [gentleOverride, setGentle] = useState<boolean | null>(null),
     [notice, setNotice] = useState("");
+  const [timeMode, setTimeMode] = useState<TimeMode>("auto"),
+    [weatherMode, setWeatherMode] = useState<WeatherMode>("auto");
   const prefersGentle = useSyncExternalStore(
     motionSubscribe,
     motionSnapshot,
@@ -126,8 +135,8 @@ export default function SleighSimulator({
     callbackRef.current = onComplete;
   }, [onComplete]);
   useEffect(() => {
-    optionsRef.current = { snow, gentle };
-  }, [snow, gentle]);
+    optionsRef.current = { snow, gentle, timeMode, weatherMode };
+  }, [snow, gentle, timeMode, weatherMode]);
   const commit = useCallback((state: FlightState) => {
     stateRef.current = state;
     setFlight(state);
@@ -271,6 +280,9 @@ export default function SleighSimulator({
       if (state.phase !== "paused" && state.phase !== "complete")
         sceneTime += dt;
       scene.draw(next, sceneTime, optionsRef.current);
+      soundRef.current?.setWeather(
+        getEnvironment(next.elapsed, optionsRef.current).windX,
+      );
       soundRef.current?.setSpeed(next.phase === "flying" ? next.speed : 0);
       if (now - lastUI > 80 || next.phase !== state.phase) {
         setFlight({ ...next });
@@ -360,7 +372,7 @@ export default function SleighSimulator({
     (box?.querySelector<HTMLButtonElement>("button") ?? box)?.focus();
     const trap = (event: KeyboardEvent) => {
       if (event.key !== "Tab" || !box) return;
-      const controls = box.querySelectorAll<HTMLElement>("button,input");
+      const controls = box.querySelectorAll<HTMLElement>("button,input,select");
       if (controls.length === 0) {
         event.preventDefault();
         return;
@@ -410,6 +422,11 @@ export default function SleighSimulator({
   );
   const routePercent = Math.min(100, (flight.distance / ROUTE_LENGTH) * 100);
   const nextGate = STAR_GATES[flight.nextGate];
+  const environment = getEnvironment(flight.elapsed, { timeMode, weatherMode });
+  const routeStop = routeStopAt(flight.distance);
+  const routeKm = (ROUTE_LENGTH / 1000).toLocaleString("nb-NO", {
+    maximumFractionDigits: 1,
+  });
   return (
     <main
       className={`sl-simulator sl-third-person ${className} ${ready ? "is-ready" : "is-active"} ${gentle ? "sl-gentle" : ""}`}
@@ -479,11 +496,29 @@ export default function SleighSimulator({
           </button>
         </div>
       </header>
-      <div className="sl-weather">
-        <Icon name="snow" size={30} />
+      <div
+        className="sl-weather"
+        aria-label={`${environment.periodLabel}, klokken ${environment.clock}, ${environment.weatherLabel}, ${environment.temperature} grader`}
+      >
+        <Icon
+          name={
+            environment.snowfall > 0.25
+              ? "snow"
+              : environment.night > 0.5
+                ? "moon"
+                : "sun"
+          }
+          size={30}
+        />
         <div>
-          <strong>−8°</strong>
-          <span>SNØFALL · LETT SNØ</span>
+          <strong>{environment.temperature}°</strong>
+          <span>
+            {environment.clock} · {environment.periodLabel.toUpperCase()}
+          </span>
+          <small className="sl-weather-detail">
+            {environment.weatherLabel.toUpperCase()}
+            {environment.aurora > 0.25 ? " · NORDLYS" : ""}
+          </small>
         </div>
       </div>
       {ready && (
@@ -535,7 +570,9 @@ export default function SleighSimulator({
             <span className="sl-eyebrow">
               {phase === "paused" ? "ET LITE PUSTEROM" : "REISEN HAR BEGYNT"}
             </span>
-            <h2>Over tretoppene</h2>
+            <h2>
+              {routeStop.distance === 0 ? "Over tretoppene" : routeStop.name}
+            </h2>
             <span className="sl-flight-sub">
               {nextGate
                 ? `Neste stjerne om ${Math.max(0, Math.round(nextGate.distance - flight.distance))} meter`
@@ -605,13 +642,7 @@ export default function SleighSimulator({
         <span className="sl-location-mark">✦</span>
         <div>
           <span>DU ER HER</span>
-          <strong>
-            {flight.distance < 600
-              ? "Snøfall"
-              : flight.distance < 1200
-                ? "Den stille skogen"
-                : "Stjernedalen"}
-          </strong>
+          <strong>{routeStop.name}</strong>
         </div>
         <button
           onClick={() => setMap(!map)}
@@ -624,7 +655,7 @@ export default function SleighSimulator({
       {map && (
         <aside className="sl-map">
           <div className="sl-map-header">
-            <span>EN LITEN REISE</span>
+            <span>EN LANG REISE GJENNOM SNØFALL</span>
             <button
               className="sl-icon-button"
               onClick={() => setMap(false)}
@@ -635,33 +666,28 @@ export default function SleighSimulator({
           </div>
           <h3>Følg stjernene hjem.</h3>
           <ol>
-            {[
-              "Snøfall",
-              "Den stille skogen",
-              "Stjernedalen",
-              "Hjem til Snøfall",
-            ].map((place, i) => (
+            {ROUTE_STOPS.map((stop, i) => (
               <li
-                key={place}
-                className={flight.distance >= i * 600 ? "is-visited" : ""}
+                key={stop.distance}
+                className={flight.distance >= stop.distance ? "is-visited" : ""}
               >
-                <span>{i === 3 ? <Icon name="snow" size={13} /> : i + 1}</span>
+                <span>
+                  {i === ROUTE_STOPS.length - 1 ? (
+                    <Icon name="snow" size={13} />
+                  ) : (
+                    i + 1
+                  )}
+                </span>
                 <div>
-                  {place}
-                  <small>
-                    {i === 0
-                      ? "HER BEGYNNER EVENTYRET"
-                      : i === 3
-                        ? "EN TRYGG LANDING"
-                        : i === 1
-                          ? "OVER SNØTUNGE GRANTRÆR"
-                          : "ET LYS I VINTERMØRKET"}
-                  </small>
+                  {stop.name}
+                  <small>{stop.description.toUpperCase()}</small>
                 </div>
               </li>
             ))}
           </ol>
-          <p>1,8 kilometer · 8 stjerner · Din egen vei</p>
+          <p>
+            {routeKm} kilometer · {STAR_GATES.length} stjerner · Ca. 5 minutter
+          </p>
         </aside>
       )}
       <div className="sl-bottom">
@@ -713,7 +739,7 @@ export default function SleighSimulator({
               <span>HJEM TIL SNØFALL</span>
               <span>
                 {(flight.distance / 1000).toFixed(1).replace(".", ",")}{" "}
-                <small>/ 1,8 KM</small>
+                <small>/ {routeKm} KM</small>
               </span>
             </div>
             <div className="sl-progress">
@@ -832,15 +858,13 @@ export default function SleighSimulator({
               Du samlet {flight.stars} av {STAR_GATES.length} stjerner på{" "}
               {Math.round(flight.elapsed)} sekunder.
             </p>
-            <div className="sl-result-stars">
-              {Array.from({ length: STAR_GATES.length }, (_, i) => (
-                <Icon
-                  name="star"
-                  key={i}
-                  size={24}
-                  className={i < flight.stars ? "" : "is-lost"}
-                />
-              ))}
+            <div
+              className="sl-result-score"
+              aria-label={`${flight.stars} av ${STAR_GATES.length} stjerner`}
+            >
+              <Icon name="star" size={25} />
+              <strong>{flight.stars}</strong>
+              <span>/ {STAR_GATES.length} stjerner</span>
             </div>
             <button
               className="sl-launch"
@@ -937,6 +961,39 @@ export default function SleighSimulator({
                   <br />
                   Finn stemningen som passer deg.
                 </p>
+                <label className="sl-setting sl-select-setting">
+                  <span>
+                    <strong>Tid på døgnet</strong>
+                    <small>Se solen gå ned og nordlyset komme frem</small>
+                  </span>
+                  <select
+                    value={timeMode}
+                    onChange={(e) => setTimeMode(e.target.value as TimeMode)}
+                    aria-label="Tid på døgnet"
+                  >
+                    <option value="auto">Dag og natt</option>
+                    <option value="day">Dag</option>
+                    <option value="night">Natt</option>
+                  </select>
+                </label>
+                <label className="sl-setting sl-select-setting">
+                  <span>
+                    <strong>Vær</strong>
+                    <small>Skiftende vintervær gjennom dalen</small>
+                  </span>
+                  <select
+                    value={weatherMode}
+                    onChange={(e) =>
+                      setWeatherMode(e.target.value as WeatherMode)
+                    }
+                    aria-label="Vær"
+                  >
+                    <option value="auto">Skiftende vær</option>
+                    <option value="clear">Klart</option>
+                    <option value="snow">Snøvær</option>
+                    <option value="storm">Snøbyger</option>
+                  </select>
+                </label>
                 <label className="sl-setting">
                   <span>
                     <strong>Rolige bevegelser</strong>
@@ -951,8 +1008,8 @@ export default function SleighSimulator({
                 </label>
                 <label className="sl-setting">
                   <span>
-                    <strong>Snø i lufta</strong>
-                    <small>Små snøfnugg som driver forbi</small>
+                    <strong>Vis snøfnugg</strong>
+                    <small>Snø og vind følger været på reisen</small>
                   </span>
                   <input
                     type="checkbox"
