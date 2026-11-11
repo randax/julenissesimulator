@@ -20,6 +20,7 @@ import { LAUNCH_APPROACH, WORLD_TILE_LENGTH } from "./route";
 import { targetsNear } from "./houses";
 import { DELIVERED_DISTANCE, type Aim, type DeliveryState, type ThrowPrediction } from "./delivery";
 import { createPackageMeshes, createHouseMarker, createLandingMarker } from "./package-models";
+import { terrainHeight } from "./terrain";
 import { journeySpace, visibleTiles } from "./journey-space";
 
 export interface SceneOptions extends Partial<EnvironmentOptions> {
@@ -113,9 +114,9 @@ export class SleighScene {
   private packageMeshes = createPackageMeshes();
   private houseMarkers = [createHouseMarker(false), createHouseMarker(true)];
   private landingMarkers = {
-    perfect: createLandingMarker("perfect"),
-    close: createLandingMarker("close"),
-    miss: createLandingMarker("miss"),
+    perfect: createLandingMarker("perfect", undefined, 3),
+    close: createLandingMarker("close", undefined, 3),
+    miss: createLandingMarker("miss", undefined, 3),
   };
   private guideBuffer: WebGLBuffer | null = null;
   private lastThrown = 0;
@@ -582,12 +583,19 @@ export class SleighScene {
     const prediction = visual.prediction;
     if (!prediction || state.phase !== "flying") return;
     const kind = (prediction.distance ?? Infinity) <= 2 ? "perfect" : (prediction.distance ?? Infinity) <= 15 ? "close" : "miss";
+    // One reusable streaming buffer: neither moving circle nor arc enters the static mesh cache.
+    const guide = new MeshBuilder();
     if (prediction.landing) {
       const p = prediction.landing;
-      this.drawMesh(this.landingMarkers[kind], transform([p[0], p[1] + 0.12, p[2] + origin]));
+      if (p[1] > terrainHeight(p[0], p[2]) + 2) {
+        // A roof impact keeps its indicator on the roof, at the actual hit location.
+        this.drawMesh(this.landingMarkers[kind], transform([p[0], p[1] + 0.12, p[2] + origin]));
+      } else {
+        const circle = createLandingMarker(kind,
+          (x, z) => terrainHeight(p[0] + x, p[2] + z));
+        guide.append(circle, transform([p[0], 0, p[2] + origin]));
+      }
     }
-    // One reusable streaming buffer: the preview never enters the static mesh cache.
-    const guide = new MeshBuilder();
     const tint = colour(kind === "perfect" ? 0x90ffc9 : kind === "close" ? 0xffd38c : 0xe7bbb3);
     const points = prediction.points;
     for (let i = 1; i < points.length; i++) {

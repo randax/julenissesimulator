@@ -132,13 +132,44 @@ export function createHouseMarker(delivered: boolean): Float32Array {
   return finishGuide(mesh);
 }
 
+/** A terrain-following reticle with a dark outline so it stays readable on snow. */
 export function createLandingMarker(
   kind: "perfect" | "close" | "miss",
+  heightAt: (x: number, z: number) => number = () => 0,
+  radius = 7.5,
 ): Float32Array {
   const mesh = new MeshBuilder();
   const tint = kind === "perfect" ? GREEN : kind === "close" ? GOLD : ROSE;
-  ring(mesh, 1.4, 0.055, 0.045, tint);
-  mesh.rod([-0.48, 0.055, 0], [0.48, 0.055, 0], 0.045, tint, 6);
-  mesh.rod([0, 0.055, -0.48], [0, 0.055, 0.48], 0.045, tint, 6);
-  return finishGuide(mesh);
+  const outline = colour(0x163848);
+  const white = colour(0xfff0cf);
+  const point = (x: number, z: number, lift: number): Vec3 => [
+    x, heightAt(x, z) + lift, z,
+  ];
+  const band = (r: number, width: number, colour: Colour, lift: number) => {
+    for (let i = 0; i < 64; i++) {
+      const a = i * Math.PI / 32, b = (i + 1) * Math.PI / 32;
+      const inner = r - width / 2, outer = r + width / 2;
+      mesh.quad(
+        point(Math.cos(a) * inner, Math.sin(a) * inner, lift),
+        point(Math.cos(b) * inner, Math.sin(b) * inner, lift),
+        point(Math.cos(b) * outer, Math.sin(b) * outer, lift),
+        point(Math.cos(a) * outer, Math.sin(a) * outer, lift),
+        colour, 1,
+      );
+    }
+  };
+  band(radius, radius * 0.13, outline, 0.18);
+  band(radius, radius * 0.055, tint, 0.24);
+  band(radius * 0.32, radius * 0.065, outline, 0.18);
+  band(radius * 0.32, radius * 0.025, tint, 0.24);
+  const cross = (width: number, tint: Colour, lift: number) => {
+    const length = radius * 0.48;
+    mesh.quad(point(-length, -width, lift), point(-length, width, lift),
+      point(length, width, lift), point(length, -width, lift), tint, 1);
+    mesh.quad(point(-width, -length, lift), point(-width, length, lift),
+      point(width, length, lift), point(width, -length, lift), tint, 1);
+  };
+  cross(radius * 0.045, outline, 0.18);
+  cross(radius * 0.014, white, 0.3);
+  return mesh.build();
 }

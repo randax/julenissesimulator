@@ -19,7 +19,7 @@ import {
 } from "./flight";
 import { SleighScene } from "./scene";
 import { createDelivery, predictThrow, stepDelivery, throwPackage, type ThrowPrediction } from "./delivery";
-import { chargePower, createAim, keyboardAim, makeThrowSource, pointerAim } from "./aim";
+import { chargePower, createAim, keyboardAim, makeThrowSource, pointerAim, smoothAim, dragAim } from "./aim";
 import { DELIVERY_TARGET_COUNT } from "./houses";
 import { getEnvironment, type TimeMode, type WeatherMode } from "./environment";
 import { ROUTE_STOPS, routeStopAt } from "./route";
@@ -116,6 +116,10 @@ export default function SleighSimulator({
   const callbackRef = useRef(onComplete);
   const deliveryRef = useRef(createDelivery());
   const aimRef = useRef(createAim());
+  const aimTargetRef = useRef(createAim());
+  const aimDragRef = useRef<{
+    pointerId: number; x: number; y: number; start: ReturnType<typeof createAim>;
+  } | null>(null);
   const predictionRef = useRef<ThrowPrediction | null>(null);
   const chargeRef = useRef<{ started: number; pointerId?: number } | null>(null);
   const throwQueueRef = useRef<number | null>(null);
@@ -157,12 +161,15 @@ export default function SleighSimulator({
   const clearInput = useCallback(() => {
     keys.current.clear();
     touch.current = { ...neutral };
+    aimTargetRef.current = aimRef.current;
+    aimDragRef.current = null;
     chargeRef.current = null;
     throwQueueRef.current = null;
   }, []);
   const resetDeliveries = useCallback(() => {
     deliveryRef.current = createDelivery();
     aimRef.current = createAim();
+    aimTargetRef.current = aimRef.current;
     predictionRef.current = null;
     completionReported.current = false;
     setDelivery(deliveryRef.current);
@@ -265,8 +272,7 @@ export default function SleighSimulator({
     let frame = 0,
       last = 0,
       lastUI = 0,
-      sceneTime = 0,
-      lastPrediction = 0;
+      sceneTime = 0;
     const tick = (now: number) => {
       const dt = last ? Math.min((now - last) / 1000, 0.1) : 0;
       last = now;
@@ -305,9 +311,10 @@ export default function SleighSimulator({
         deliveryRef.current = stepDelivery(previousDelivery, wind, dt);
       }
       if (next.phase === "flying") {
-        aimRef.current = keyboardAim(aimRef.current,
+        aimTargetRef.current = keyboardAim(aimTargetRef.current,
           Number(k.has("l")) - Number(k.has("j")),
           Number(k.has("i")) - Number(k.has("k")), dt);
+        aimRef.current = smoothAim(aimRef.current, aimTargetRef.current, dt);
         if (throwQueueRef.current !== null) {
           deliveryRef.current = throwPackage(deliveryRef.current, makeThrowSource(next, state, dt),
             { ...aimRef.current, power: throwQueueRef.current });
@@ -317,10 +324,9 @@ export default function SleighSimulator({
       const charge = chargeRef.current
         ? Math.min(1, Math.max(0, (next.elapsed - chargeRef.current.started) / 0.85)) : 0;
       const activeAim = { ...aimRef.current, power: 36 + charge * 22 };
-      if (next.phase === "flying" && now - lastPrediction >= 50) {
+      if (next.phase === "flying") {
         predictionRef.current = predictThrow(makeThrowSource(next, state, dt), activeAim, wind);
-        lastPrediction = now;
-      } else if (next.phase !== "flying") predictionRef.current = null;
+      } else predictionRef.current = null;
       const landing = deliveryRef.current.lastLanding;
       if (landing && landing.packageId !== previousDelivery.lastLanding?.packageId) {
         if (landing.awarded > 0) soundRef.current?.bell();
@@ -511,7 +517,7 @@ export default function SleighSimulator({
         if (event.pointerType !== "mouse" || stateRef.current.phase !== "flying" || dialog || map || sceneError) return;
         if ((event.target as HTMLElement).closest("button,select,input,.sl-overlay,.sl-map")) return;
         const bounds = event.currentTarget.getBoundingClientRect();
-        aimRef.current = pointerAim((event.clientX - bounds.left) / bounds.width, (event.clientY - bounds.top) / bounds.height);
+        aimTargetRef.current = pointerAim((event.clientX - bounds.left) / bounds.width, (event.clientY - bounds.top) / bounds.height);
       }}
       onPointerDown={(event) => {
         if (event.pointerType !== "mouse" || event.button !== 0 || dialog || map || sceneError || stateRef.current.phase !== "flying") return;
@@ -708,7 +714,7 @@ export default function SleighSimulator({
               <strong>{aimView.prediction?.distance == null ? "Sikt mot et merket hus" :
                 aimView.prediction.distance < 0.5 ? "Rett på huset" :
                 `${Math.round(aimView.prediction.distance)} m fra huset`}</strong>
-              <span>{aimView.prediction?.pointsValue ? `${aimView.prediction.pointsValue} mulige poeng` : "Gullmerke = hus som venter på gave"}</span>
+              <span>{aimView.prediction?.pointsValue ? `${aimView.prediction.pointsValue} mulige poeng` : "Sirkelen viser hvor pakken lander"}</span>
               <div className="sl-charge" role="meter" aria-label="Kastestyrke" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(aimView.charge * 100)}>
                 <i style={{ width: `${aimView.charge * 100}%` }} />
               </div>
@@ -729,14 +735,22 @@ export default function SleighSimulator({
                   onPointerDown={(event) => {
                     event.preventDefault();
                     event.currentTarget.setPointerCapture(event.pointerId);
-                    const bounds = event.currentTarget.getBoundingClientRect();
-                    aimRef.current = pointerAim((event.clientX - bounds.left) / bounds.width, (event.clientY - bounds.top) / bounds.height);
+                    aimDragRef.current = {
+                      pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+                      start: { ...aimTargetRef.current },
+                    };
                   }}
                   onPointerMove={(event) => {
-                    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+                    const drag = aimDragRef.current;
+                    if (!drag || drag.pointerId !== event.pointerId ||
+                      !event.currentTarget.hasPointerCapture(event.pointerId)) return;
                     const bounds = event.currentTarget.getBoundingClientRect();
-                    aimRef.current = pointerAim((event.clientX - bounds.left) / bounds.width, (event.clientY - bounds.top) / bounds.height);
+                    aimTargetRef.current = dragAim(drag.start,
+                      (event.clientX - drag.x) / bounds.width,
+                      (event.clientY - drag.y) / bounds.height);
                   }}
+                  onPointerUp={() => { aimDragRef.current = null; }}
+                  onPointerCancel={() => { aimDragRef.current = null; }}
                 >⌖<small>DRA · SIKT</small></button>
                 <button className="sl-throw-button" aria-label="Hold og slipp for å kaste en gave"
                   onPointerDown={(event) => {

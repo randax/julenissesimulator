@@ -6,6 +6,8 @@ import {
   keyboardAim,
   makeThrowSource,
   pointerAim,
+  smoothAim,
+  dragAim,
 } from "./aim.ts";
 import { createFlight, startFlight, stepFlight } from "./flight.ts";
 import { LAUNCH_APPROACH } from "./route.ts";
@@ -114,4 +116,44 @@ test("respawns, replays, phase changes and invalid timing never impart teleport 
     ),
     [0, 0],
   );
+});
+
+
+test("pointer target changes settle smoothly without snapping or overshooting", () => {
+  const start = createAim();
+  const target = pointerAim(0.05, 0.1);
+  let actual = start;
+  for (let frame = 0; frame < 24; frame++) {
+    const next = smoothAim(actual, target, 1 / 60);
+    assert.ok(next.yaw < actual.yaw && next.yaw > target.yaw);
+    assert.ok(next.elevation > actual.elevation && next.elevation < target.elevation);
+    if (frame === 0) assert.ok(Math.abs(next.yaw - start.yaw) < Math.abs(target.yaw - start.yaw) / 3);
+    actual = next;
+  }
+  assert.ok(Math.abs(actual.yaw - target.yaw) < 0.01);
+  assert.deepEqual(start, createAim());
+});
+
+test("aim damping is frame-rate independent and frozen during pause", () => {
+  const target = pointerAim(0.9, 0.8);
+  const run = (fps: number) => {
+    let aim = createAim();
+    for (let i = 0; i < fps / 5; i++) aim = smoothAim(aim, target, 1 / fps);
+    return aim;
+  };
+  near(run(30).yaw, run(120).yaw);
+  near(run(30).elevation, run(120).elevation);
+  const start = createAim();
+  for (const dt of [0, -1, Number.NaN, Infinity]) assert.deepEqual(smoothAim(start, target, dt), start);
+  const safe = smoothAim(start, {yaw: Infinity, elevation: Number.NaN, power: 36}, 0.02);
+  assert.ok(Object.values(safe).every(Number.isFinite));
+});
+
+test("touch dragging starts from the existing aim and clamps at the aim limits", () => {
+  const start = Object.freeze(createAim());
+  assert.deepEqual(dragAim(start, 0, 0), start);
+  const next = dragAim(start, 0.1, -0.1);
+  assert.ok(next.yaw > start.yaw && next.elevation > start.elevation);
+  assert.deepEqual(dragAim(start, 100, -100), {yaw: 1.8, elevation: 0.55, power: 36});
+  assert.deepEqual(dragAim(start, Number.NaN, Infinity), start);
 });

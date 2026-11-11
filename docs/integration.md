@@ -102,6 +102,8 @@ Use the mouse or I/J/K/L to aim, then hold and release E or the left mouse butto
 
 Gold gift markers identify houses awaiting packages; a best landing within 10 metres turns a marker green. Scores use horizontal distance to the actual oriented house footprint. Roof hits earn 1,000 points, while ground landings fall off to zero at 30 metres. A new throw adds only the improvement over that house's previous best score.
 
+Aiming uses frame-rate-independent damping, with the same smoothed angle used for preview and release. The preview updates every animation frame, and a large outlined circle follows the terrain at the predicted landing point. Touch-pad drags are relative to the aim at contact.
+
 A package inherits the sleigh's forward, lateral and vertical velocity at release. Gravity, wind and air drag then determine its flight; speed changes both travel distance and the available aiming window. The preview arc uses the same physics kernel as live packages, with the current wind held constant for prediction. Changing weather can therefore cause small differences during flight. Cargo is unlimited, with a throw cooldown and bounded active/landed package storage.
 
 House geometry and collision footprints share `houses.ts`. Keep this module shared when changing the village layout, and preserve absolute world coordinates in `delivery.ts` so scenery recycling cannot move a package or change its target ID. Pausing freezes package physics and cancels a charged throw.

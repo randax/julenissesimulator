@@ -22,6 +22,8 @@ Open http://localhost:3000. For the production static demo, run `npm run build` 
 - **P / Escape:** pause and resume.
 - On touchscreens, use the directional and speed controls, drag the aiming pad, and hold/release the throw button.
 
+Aiming eases smoothly toward mouse or keyboard input. The outlined ground circle follows the snow and shows the predicted landing point; touch dragging keeps the current aim when you first press the pad.
+
 The sleigh launches at 180 km/h and accelerates smoothly to a 230 km/h cruise. The 18 km journey takes about 4 minutes 42 seconds at cruise or 3 minutes 11 seconds with sustained boost. Steering and climb rates are tuned for the faster pace. The sleigh banks into turns, pitches during climbs/descents, and settles with damped body motion; passengers brace while keeping their gaze forward.
 
 Deliver packages to the 154 marked houses along six route waypoints. Gold gift markers show houses awaiting a delivery; successful deliveries turn them green. Each house can earn up to 1,000 points: a roof hit scores full points, and landings farther from its footprint score progressively less, down to zero at 30 metres. A landing within 10 metres counts as delivered. Only an improvement to a house's best score adds points, so repeated throws cannot farm the same landing.

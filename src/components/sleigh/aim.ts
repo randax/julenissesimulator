@@ -42,6 +42,29 @@ export function keyboardAim(
   };
 }
 
+/** A short, frame-rate-independent response softens input without changing the throw model. */
+export function smoothAim(current: Aim, target: Aim, dt: number): Aim {
+  if (!Number.isFinite(dt) || dt <= 0) return current;
+  const blend = -Math.expm1(-18 * Math.min(dt, 0.1));
+  const bounded = keyboardAim(target, 0, 0, 0);
+  const yaw = Number.isFinite(target.yaw) ? bounded.yaw : current.yaw;
+  const elevation = Number.isFinite(target.elevation) ? bounded.elevation : current.elevation;
+  return {
+    yaw: current.yaw + (yaw - current.yaw) * blend,
+    elevation: current.elevation + (elevation - current.elevation) * blend,
+    power: current.power + (bounded.power - current.power) * blend,
+  };
+}
+
+/** Touch contact never recentres the aim; dragging offsets the angle present at contact. */
+export function dragAim(start: Aim, dxNormalized: number, dyNormalized: number): Aim {
+  return {
+    yaw: clamp(start.yaw + finite(dxNormalized) * 2.4, -1.8, 1.8),
+    elevation: clamp(start.elevation - finite(dyNormalized) * 1.2, -0.95, 0.55),
+    power: start.power,
+  };
+}
+
 export function chargePower(heldSeconds: number): number {
   return 36 + 22 * clamp(finite(heldSeconds) / 0.85, 0, 1);
 }
