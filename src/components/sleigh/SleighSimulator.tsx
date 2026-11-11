@@ -367,6 +367,7 @@ export default function SleighSimulator({
   useEffect(() => {
     if (!dialog && phase !== "paused" && phase !== "complete" && !sceneError)
       return;
+    const simulator = root.current;
     const previous = document.activeElement as HTMLElement | null;
     const box = dialogBox.current;
     (box?.querySelector<HTMLButtonElement>("button") ?? box)?.focus();
@@ -390,7 +391,9 @@ export default function SleighSimulator({
     document.addEventListener("keydown", trap);
     return () => {
       document.removeEventListener("keydown", trap);
-      previous?.focus();
+      if (stateRef.current.phase === "flying") simulator?.focus();
+      else if (previous?.isConnected) previous.focus();
+      else simulator?.focus();
     };
   }, [dialog, phase, sceneError]);
   const touchButton = (
