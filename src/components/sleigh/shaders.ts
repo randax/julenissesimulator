@@ -1,5 +1,4 @@
-import { WORLD_TILE_LENGTH } from "./route.ts";
-const CYCLE = (Math.PI * 2) / WORLD_TILE_LENGTH;
+import { TERRAIN_CHANNELS_GLSL } from "./terrain.ts";
 const INSTANCE = `
  attribute vec4 aInstance;
  attribute float aAngle;
@@ -29,8 +28,9 @@ export const VERTEX = `
 export const FRAGMENT = `
  precision highp float;
  varying vec3 vColour;varying vec3 vNormal;varying vec3 vWorld;varying vec3 vSurface;varying float vDepth;varying float vEmission;varying vec4 vShadow;
- uniform vec3 uLantern;uniform vec3 uCamera;uniform sampler2D uShadowMap;uniform vec4 uWarmLights[6];uniform vec4 uEnvironment;uniform vec4 uWeather;uniform vec3 uLightDirection;
+ uniform vec3 uLantern;uniform vec3 uCamera;uniform sampler2D uShadowMap;uniform vec4 uWarmLights[6];uniform vec4 uEnvironment;uniform vec4 uWeather;uniform vec3 uLightDirection;uniform float uRenderOrigin;
  ${NOISE}
+ ${TERRAIN_CHANNELS_GLSL}
  float unpackDepth(vec4 value){return dot(value,vec4(1.0/16777216.0,1.0/65536.0,1.0/256.0,1.0))*(255.0/256.0);}
  float visibility(vec3 normal){
   vec3 p=vShadow.xyz/vShadow.w*.5+.5;
@@ -68,9 +68,10 @@ export const FRAGMENT = `
   lighting+=vec3(1.0,.46,.10)*min(localWarmth,.68);
   vec3 albedo=vColour;
   // These coordinates share the terrain's winding stream and village path.
-  float riverCenter=sin(vWorld.z*${CYCLE.toFixed(12)}*3.0)*10.0+sin(vWorld.z*${CYCLE.toFixed(12)})*8.0;
-  float roadCenter=riverCenter+14.0+sin(vWorld.z*${CYCLE.toFixed(12)}*5.0+.5)*7.0;
-  float ground=snow*(1.0-smoothstep(6.0,8.0,vWorld.y))*smoothstep(.65,.9,normal.y);
+  float globalZ=vWorld.z-uRenderOrigin;
+  float riverCenter=streamCenterAt(globalZ);
+  float roadCenter=pathCenterAt(globalZ);
+  float ground=snow*(1.0-smoothstep(4.5,7.0,vWorld.y-valleyFloorAt(globalZ)))*smoothstep(.65,.9,normal.y);
   float river=(1.0-smoothstep(1.9,2.4,abs(vWorld.x-riverCenter)))*ground;
   float road=(1.0-smoothstep(5.5,7.0,abs(vWorld.x-roadCenter)))*ground;
   albedo=mix(albedo,vec3(.78,.83,.92),road*.50);

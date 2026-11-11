@@ -1,136 +1,85 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  HOUSE_LAYOUT,
-  DELIVERY_TARGETS,
-  DELIVERY_TARGET_COUNT,
-  targetsNear,
-  sleighWorldZ,
+  HOUSE_LAYOUT, housesForTile, DELIVERY_TARGETS, DELIVERY_TARGET_COUNT,
+  targetsNear, sleighWorldZ,
 } from "./houses.ts";
-import { terrainHeight } from "./terrain.ts";
+import { terrainHeight, valleyCenter, valleyWidth } from "./terrain.ts";
 import { LAUNCH_APPROACH, ROUTE_LENGTH, WORLD_TILE_LENGTH } from "./route.ts";
 
-test("the original twenty seeded cottages retain their placement and geometry", () => {
-  assert.equal(HOUSE_LAYOUT.length, 20);
-  assert.deepEqual(
-    HOUSE_LAYOUT.map((house) => house.id),
-    Array.from({ length: 20 }, (_, i) => i),
-  );
-  // Original village fixtures lock the seed sequence across all three settlements.
-  for (const [index, x, z, width, height, yaw] of [
-    [
-      0, -50.794472863155534, -7.597945794273983, 20.406682099899626,
-      29.337442824627942, -0.12516696684411727,
-    ],
-    [
-      8, -53.76286729144317, -715.4900899833738, 20.864686102664564,
-      27.476930726552382, -0.036669544149990546,
-    ],
-    [
-      19, 48.094833540726995, -1649.6109367685567, 18.076365560933482,
-      30.266214916977333, 0.07292811211424123,
-    ],
-  ]) {
-    const house = HOUSE_LAYOUT[index];
-    assert.deepEqual(
-      [house.x, house.z, house.width, house.height, house.yaw],
-      [x, z, width, height, yaw],
-    );
+test("each chunk scatters distinct, deterministic hamlets across the winding valley", () => {
+  assert.equal(HOUSE_LAYOUT, housesForTile(0));
+  const signatures = new Set<string>();
+  for (let tile = 0; tile <= 8; tile++) {
+    const houses = housesForTile(tile);
+    assert.equal(housesForTile(tile), houses);
+    assert.ok(houses.length >= 26 && houses.length <= 36);
+    assert.deepEqual(houses.map((house) => house.id), Array.from({ length: houses.length }, (_, i) => i));
+    const offsets: number[] = [];
+    for (const house of houses) {
+      const globalZ = house.z - tile * WORLD_TILE_LENGTH;
+      const offset = house.x - valleyCenter(globalZ);
+      assert.equal(Math.sign(offset), house.side);
+      assert.equal(house.y, terrainHeight(house.x, globalZ));
+      assert.ok(Math.abs(offset) > 40 && Math.abs(offset) < valleyWidth(globalZ) - 20);
+      assert.ok(house.z < -25 && house.z > -WORLD_TILE_LENGTH + 25);
+      assert.ok(house.width >= 15 && house.width < 25 && house.height >= 23 && house.height < 36);
+      assert.ok(Object.values(house).every(Number.isFinite));
+      offsets.push(offset);
+    }
+    assert.ok(Math.max(...offsets) - Math.min(...offsets) > 180);
+    assert.ok(new Set(houses.map((house) => Math.round(house.z))).size > houses.length * 0.85,
+      "cottages must not form paired rows at matching longitudinal positions");
+    signatures.add(JSON.stringify(houses.map(({ x, z, width, yaw }) => [x, z, width, yaw])));
   }
-  for (const house of HOUSE_LAYOUT) {
-    assert.equal(house.side, house.id % 2 ? 1 : -1);
-    assert.equal(Math.sign(house.x), house.side);
-    assert.equal(house.y, terrainHeight(house.x, house.z));
-    assert.equal(house.depth, house.width * 0.86);
-    assert.ok(house.z <= 0 && house.z >= -WORLD_TILE_LENGTH);
-    assert.ok(house.width >= 17 && house.width < 21);
-    assert.ok(house.height >= 27 && house.height < 34);
-    assert.ok(Object.values(house).every(Number.isFinite));
-  }
+  assert.equal(signatures.size, 9, "neighboring scenery chunks must not reuse a village layout");
 });
 
-test("every delivery target is a unique rendered house within the journey", () => {
-  assert.equal(DELIVERY_TARGET_COUNT, 154);
-  assert.equal(DELIVERY_TARGET_COUNT, DELIVERY_TARGETS.length);
-  assert.equal(
-    new Set(DELIVERY_TARGETS.map((target) => target.id)).size,
-    DELIVERY_TARGET_COUNT,
-  );
-  let previousDistance = 0;
-  for (const target of DELIVERY_TARGETS) {
-    const house = HOUSE_LAYOUT[target.localId];
-    assert.equal(target.id, `${target.tile}:${house.id}`);
-    assert.equal(target.z, house.z - target.tile * WORLD_TILE_LENGTH);
-    assert.equal(target.distance, LAUNCH_APPROACH - target.z);
-    assert.ok(
-      target.distance >= previousDistance && target.distance <= ROUTE_LENGTH,
-    );
-    assert.ok(target.distance >= 0);
-    assert.deepEqual(
-      [
-        target.x,
-        target.y,
-        target.width,
-        target.depth,
-        target.height,
-        target.yaw,
-        target.side,
-      ],
-      [
-        house.x,
-        house.y,
-        house.width,
-        house.depth,
-        house.height,
-        house.yaw,
-        house.side,
-      ],
-    );
-    assert.ok(Math.abs(target.y - terrainHeight(target.x, target.z)) < 1e-9);
-    previousDistance = target.distance;
-  }
-  // The next tile must not silently reuse the previous cottage's scoring identity.
-  for (const house of HOUSE_LAYOUT) {
-    const first = DELIVERY_TARGETS.find(
-      (target) => target.tile === 0 && target.localId === house.id,
-    )!;
-    const next = DELIVERY_TARGETS.find(
-      (target) => target.tile === 1 && target.localId === house.id,
-    )!;
-    assert.notEqual(first.id, next.id);
-    assert.ok(Math.abs(first.z - next.z - WORLD_TILE_LENGTH) < 1e-9);
-  }
-});
-
-test("the launch run-up places the first village ahead of the sleigh", () => {
-  assert.equal(sleighWorldZ(0), LAUNCH_APPROACH);
-  assert.equal(sleighWorldZ(ROUTE_LENGTH), LAUNCH_APPROACH - ROUTE_LENGTH);
-  assert.ok(
-    DELIVERY_TARGETS[0].distance >= 250 && DELIVERY_TARGETS[0].distance < 270,
-  );
-  for (const progress of [0, 500, WORLD_TILE_LENGTH, ROUTE_LENGTH]) {
-    for (const target of targetsNear(progress)) {
-      assert.equal(
-        target.z - sleighWorldZ(progress),
-        progress - target.distance,
-      );
+test("cottages leave physical gaps around their rotated footprints and tile edges", () => {
+  for (let tile = -1; tile <= 8; tile++) {
+    const houses = housesForTile(tile);
+    for (let i = 0; i < houses.length; i++) {
+      const a = houses[i];
+      const radiusA = Math.hypot(a.width / 2 + 1.5, a.depth / 2 + 1.5);
+      assert.ok(-a.z > radiusA && a.z + WORLD_TILE_LENGTH > radiusA);
+      for (const b of houses.slice(i + 1)) {
+        const radiusB = Math.hypot(b.width / 2 + 1.5, b.depth / 2 + 1.5);
+        assert.ok(Math.hypot(a.x - b.x, a.z - b.z) >= radiusA + radiusB + 7);
+      }
     }
   }
 });
 
-test("nearby target windows include their boundaries and span tile seams", () => {
+test("every delivery target matches a unique rendered cottage in its own chunk", () => {
+  assert.equal(DELIVERY_TARGET_COUNT, DELIVERY_TARGETS.length);
+  assert.ok(DELIVERY_TARGET_COUNT > 200 && DELIVERY_TARGET_COUNT < 300);
+  assert.equal(new Set(DELIVERY_TARGETS.map((target) => target.id)).size, DELIVERY_TARGET_COUNT);
+  let previousDistance = 0;
+  for (const target of DELIVERY_TARGETS) {
+    const house = housesForTile(target.tile)[target.localId];
+    assert.equal(target.id, `${target.tile}:${house.id}`);
+    assert.equal(target.z, house.z - target.tile * WORLD_TILE_LENGTH);
+    assert.equal(target.distance, LAUNCH_APPROACH - target.z);
+    assert.ok(target.distance >= previousDistance && target.distance <= ROUTE_LENGTH);
+    for (const key of ["x", "y", "width", "depth", "height", "yaw", "side"] as const)
+      assert.equal(target[key], house[key]);
+    assert.ok(Math.abs(target.y - terrainHeight(target.x, target.z)) < 1e-9);
+    previousDistance = target.distance;
+  }
+});
+
+test("the run-up puts the first scattered cottage ahead and nearby targets span chunk seams", () => {
+  assert.equal(sleighWorldZ(0), LAUNCH_APPROACH);
+  assert.equal(sleighWorldZ(ROUTE_LENGTH), LAUNCH_APPROACH - ROUTE_LENGTH);
+  assert.ok(DELIVERY_TARGETS[0].distance >= 250 && DELIVERY_TARGETS[0].distance < 330);
   const target = DELIVERY_TARGETS.find((target) => target.tile === 1)!;
   assert.deepEqual(targetsNear(target.distance, 0, 0), [target]);
   assert.ok(targetsNear(target.distance - 900).includes(target));
   assert.ok(targetsNear(target.distance + 200).includes(target));
   assert.ok(!targetsNear(target.distance - 901).includes(target));
   assert.ok(!targetsNear(target.distance + 201).includes(target));
-  const progress = WORLD_TILE_LENGTH;
-  assert.deepEqual(
-    targetsNear(progress, 700, 500),
-    DELIVERY_TARGETS.filter(
-      (house) =>
-        house.distance >= progress - 500 && house.distance <= progress + 700,
-    ),
-  );
+  for (const progress of [0, 500, WORLD_TILE_LENGTH, ROUTE_LENGTH]) {
+    for (const target of targetsNear(progress))
+      assert.ok(Math.abs(target.z - sleighWorldZ(progress) - (progress - target.distance)) < 1e-9);
+  }
 });

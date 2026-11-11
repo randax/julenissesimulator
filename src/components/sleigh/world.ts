@@ -1,8 +1,8 @@
 import { MeshBuilder, colour, point, transform } from "./geometry.ts";
-import { addTerrain, terrainHeight, pathCenter } from "./terrain.ts";
+import { addTerrain, terrainHeight, pathCenter, streamCenter, valleyCenter } from "./terrain.ts";
 import { createFir } from "./vegetation.ts";
 import { WORLD_TILE_LENGTH } from "./route.ts";
-import { HOUSE_LAYOUT } from "./houses.ts";
+import { housesForTile } from "./houses.ts";
 import {
   addBridge,
   addLantern,
@@ -13,7 +13,7 @@ export { terrainHeight } from "./terrain.ts";
 
 export interface WorldData {
   mesh: Float32Array;
-  /** Terrain-only repeat used beyond the detailed village draw range. */
+  /** Unique terrain-only chunk used beyond the detailed village draw range. */
   farMesh: Float32Array;
   /** Two shape variants for near, middle, far and distant ridge detail. */
   treeMeshes: Float32Array[];
@@ -27,131 +27,9 @@ const random = (seed: number) => {
   return value - Math.floor(value);
 };
 
-export function createWorld(): WorldData {
-  const mesh = new MeshBuilder(),
-    glows: number[] = [],
-    trees: number[] = [];
-  addTerrain(mesh);
-  const farTerrain = new MeshBuilder();
-  addTerrain(farTerrain, true);
-  for (const { id, side, x, y, z, width, depth, height, yaw } of HOUSE_LAYOUT) {
-    const placement = transform([x, y, z], [0, yaw, 0]);
-    mesh.append(createCottage(width, depth, height, id), placement);
-    for (const source of cottageGlowPoints(width, depth, height)) {
-      const p = point(placement, source);
-      glows.push(...p, 1.9);
-    }
-    const lampX = side * 24,
-      lampY = terrainHeight(lampX, z + 13);
-    addLantern(mesh, lampX, lampY, z + 13);
-    glows.push(lampX + 1.45, lampY + 5.15, z + 13, 2.3);
-    mesh.ellipsoid(
-      [x - side * width * 0.55, y + 0.65, z + depth * 0.37],
-      [width * 0.43, 1.5, width * 0.2],
-      colour(0xd7e2f0),
-      12,
-      6,
-    );
-  }
-  for (const [start, rows] of [
-    [-6, 4],
-    [-720, 3],
-    [-1510, 3],
-  ]) {
-    for (const side of [-1, 1])
-      for (let z = start + 25; z > start - rows * 70 + 15; z -= 9) {
-        const x = side * 27 + pathCenter(z) * 0.5,
-          y = terrainHeight(x, z);
-        mesh.rod([x, y, z], [x, y + 2.5, z], 0.18, colour(0x70503a), 8);
-        mesh.ellipsoid(
-          [x, y + 2.57, z],
-          [0.36, 0.2, 0.35],
-          colour(0xe2e8f2),
-          8,
-          5,
-        );
-        for (const h of [0.85, 1.85]) {
-          const nextY = terrainHeight(x, z - 9);
-          mesh.rod(
-            [x, y + h, z],
-            [x, nextY + h, z - 9],
-            0.15,
-            colour(0x765239),
-            7,
-          );
-          mesh.rod(
-            [x, y + h + 0.16, z],
-            [x, nextY + h + 0.16, z - 9],
-            0.16,
-            colour(0xdce5f0),
-            7,
-          );
-        }
-      }
-  }
-  for (const z of [-125, -1640]) {
-    addBridge(mesh, z, terrainHeight(0, z));
-    for (const side of [-1, 1]) {
-      const x = side * 18,
-        y = terrainHeight(x, z);
-      addLantern(mesh, x, y, z);
-      glows.push(x + 1.45, y + 5.15, z, 2.5);
-    }
-  }
-  // Dense hillside forests reuse a small set of full 3D tree meshes.
-  for (let i = 0; i < 11200; i++) {
-    const side = i % 2 ? 1 : -1,
-      z = -random(i + 719) * WORLD_TILE_LENGTH;
-    const x = side * (34 + Math.pow(random(i + 45), 0.79) * 590);
-    // Keep cottage entrances and the stream/path visible.
-    if (
-      Math.abs(x) < 110 &&
-      ((z < 50 && z > -310) ||
-        (z < -650 && z > -960) ||
-        (z < -1440 && z > -1760))
-    )
-      continue;
-    const scale = 0.57 + random(i + 347) * 0.9;
-    trees.push(
-      x,
-      terrainHeight(x, z) - 0.15,
-      z,
-      scale,
-      random(i + 44) * Math.PI * 2,
-      i % 2,
-    );
-  }
-  // Tall, snowy boughs frame the village entrance just like the reference.
-  for (const [x, z, scale] of [
-    [-34, -2, 1.9],
-    [35, -8, 1.8],
-    [-37, -53, 1.5],
-    [39, -91, 1.45],
-    [-30, -340, 1.55],
-    [32, -410, 1.4],
-  ]) {
-    trees.push(
-      x,
-      terrainHeight(x, z) - 0.15,
-      z,
-      scale,
-      random(x + z) * 6.28,
-      Math.abs(x) % 2,
-    );
-  }
-  // Loose clumps near the path give the flight depth without closing its corridor.
-  for (let i = 0; i < 150; i++) {
-    const z = -320 - i * 9.7,
-      x = (i % 2 ? 1 : -1) * (32 + random(i + 511) * 28) + pathCenter(z) * 0.1;
-    trees.push(
-      x,
-      terrainHeight(x, z) - 0.15,
-      z,
-      0.7 + random(i + 7) * 0.45,
-      random(i + 3) * 6.28,
-      i % 2,
-    );
-  }
+let sharedTreeMeshes: Float32Array[] | null = null;
+function forestMeshes(): Float32Array[] {
+  if (sharedTreeMeshes) return sharedTreeMeshes;
   const treeMeshes: Float32Array[] = [];
   for (const detail of ["near", "mid", "far"] as const)
     for (const variant of [3, 19])
@@ -177,11 +55,82 @@ export function createWorld(): WorldData {
     }
     treeMeshes.push(crown.build());
   }
-  return {
-    mesh: mesh.build(),
-    farMesh: farTerrain.build(),
-    treeMeshes,
-    trees: new Float32Array(trees),
-    lights: new Float32Array(glows),
+  sharedTreeMeshes = treeMeshes;
+  return treeMeshes;
+}
+
+/** Each chunk has its own world seed; mesh Z remains local for bounded GPU coordinates. */
+export function createWorld(tile = 0, detail: "full" | "far" = "full"): WorldData {
+  const origin = tile * WORLD_TILE_LENGTH;
+  const farTerrain = new MeshBuilder();
+  addTerrain(farTerrain, true, tile);
+  const farMesh = farTerrain.build();
+  const treeMeshes = forestMeshes();
+  if (detail === "far") return {
+    mesh: farMesh, farMesh, treeMeshes, trees: new Float32Array(), lights: new Float32Array(),
   };
+  const mesh = new MeshBuilder(), glows: number[] = [], trees: number[] = [];
+  addTerrain(mesh, false, tile);
+  const houses = housesForTile(tile);
+  const seed = tile * 104729 + 521;
+  for (const { id, side, x, y, z, width, depth, height, yaw } of houses) {
+    const placement = transform([x, y, z], [0, yaw, 0]);
+    mesh.append(createCottage(width, depth, height, id), placement);
+    for (const source of cottageGlowPoints(width, depth, height)) {
+      const p = point(placement, source);
+      glows.push(...p, 1.9);
+    }
+    const lampZ = z + 13;
+    const lampX = pathCenter(lampZ - origin) + side * (10 + random(seed + id * 7) * 8);
+    const lampY = terrainHeight(lampX, lampZ - origin);
+    addLantern(mesh, lampX, lampY, lampZ);
+    glows.push(lampX + 1.45, lampY + 5.15, lampZ, 2.3);
+    mesh.ellipsoid([x - side * width * 0.55, y + 0.65, z + depth * 0.37],
+      [width * 0.43, 1.5, width * 0.2], colour(0xd7e2f0), 12, 6);
+    // Short hand-built fences follow the curved lane at a few hamlet entrances.
+    if (id % 3 !== 0) continue;
+    for (let fenceZ = z - 22; fenceZ <= z + 14; fenceZ += 9) {
+      const fenceX = pathCenter(fenceZ - origin) + side * 10;
+      const nextX = pathCenter(fenceZ + 9 - origin) + side * 10;
+      const ground = terrainHeight(fenceX, fenceZ - origin);
+      const nextGround = terrainHeight(nextX, fenceZ + 9 - origin);
+      mesh.rod([fenceX, ground, fenceZ], [fenceX, ground + 2.5, fenceZ], 0.18, colour(0x70503a), 7);
+      mesh.ellipsoid([fenceX, ground + 2.57, fenceZ], [0.36, 0.2, 0.35], colour(0xe2e8f2), 7, 4);
+      for (const h of [0.85, 1.85]) {
+        mesh.rod([fenceX, ground + h, fenceZ], [nextX, nextGround + h, fenceZ + 9], 0.15, colour(0x765239), 6);
+        mesh.rod([fenceX, ground + h + 0.16, fenceZ], [nextX, nextGround + h + 0.16, fenceZ + 9], 0.16, colour(0xdce5f0), 6);
+      }
+    }
+  }
+  for (let index = 0; index < 2 + Math.floor(random(seed + 15) * 2); index++) {
+    const z = -160 - (index + random(seed + index * 19) * 0.4) * 670;
+    const x = streamCenter(z - origin), y = terrainHeight(x, z - origin);
+    const bridge = new MeshBuilder();
+    addBridge(bridge, z, y);
+    mesh.append(bridge.build(), transform([x, 0, 0]));
+    for (const side of [-1, 1]) {
+      const lampX = x + side * 18;
+      const lampY = terrainHeight(lampX, z - origin);
+      addLantern(mesh, lampX, lampY, z);
+      glows.push(lampX + 1.45, lampY + 5.15, z, 2.5);
+    }
+  }
+  const candidateCount = 7800 + Math.floor(random(seed + 97) * 3400);
+  for (let i = 0; i < candidateCount; i++) {
+    const r = (offset: number) => random(seed + i * 23 + offset);
+    const side = r(2) < 0.5 ? -1 : 1;
+    const z = -r(3) * WORLD_TILE_LENGTH;
+    const globalZ = z - origin;
+    const relativeX = side * (34 + Math.pow(r(4), 0.79) * 590);
+    const x = valleyCenter(globalZ) + relativeX;
+    const meadow = 0.52 + Math.sin(globalZ / 380 + relativeX / 210) * 0.29;
+    if (Math.abs(relativeX) < 140 && r(5) > meadow) continue;
+    const scale = 0.55 + r(6) * 0.95;
+    if (Math.abs(x - pathCenter(globalZ)) < 10 || Math.abs(x - streamCenter(globalZ)) < 8 ||
+      houses.some((house) => Math.hypot(x - house.x, z - house.z) <
+        Math.hypot(house.width / 2 + 1.5, house.depth / 2 + 1.5) + scale * 5 + 6)) continue;
+    trees.push(x, terrainHeight(x, globalZ) - 0.15, z, scale, r(7) * Math.PI * 2, i % 2);
+  }
+  return { mesh: mesh.build(), farMesh, treeMeshes,
+    trees: new Float32Array(trees), lights: new Float32Array(glows) };
 }

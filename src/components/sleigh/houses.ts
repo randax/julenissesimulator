@@ -1,5 +1,5 @@
 import { LAUNCH_APPROACH, ROUTE_LENGTH, WORLD_TILE_LENGTH } from "./route.ts";
-import { terrainHeight } from "./terrain.ts";
+import { terrainHeight, valleyCenter, valleyWidth, valleyHeading } from "./terrain.ts";
 
 export interface HousePlacement {
   id: number;
@@ -18,36 +18,48 @@ const random = (seed: number) => {
   return value - Math.floor(value);
 };
 
-/** Shared cottage geometry and delivery footprints for one rendered valley tile. */
-export const HOUSE_LAYOUT: readonly HousePlacement[] = (() => {
+const layouts = new Map<number, readonly HousePlacement[]>();
+
+/** Irregular hamlets and isolated cabins use a unique deterministic seed per chunk. */
+export function housesForTile(tile: number): readonly HousePlacement[] {
+  const cached = layouts.get(tile);
+  if (cached) return cached;
   const houses: HousePlacement[] = [];
-  for (const [start, rows] of [
-    [-6, 4],
-    [-720, 3],
-    [-1510, 3],
-  ]) {
-    for (let row = 0; row < rows; row++) {
-      for (const side of [-1, 1] as const) {
-        const id = houses.length;
-        const z = start - row * 70 + (random(id + 44) - 0.5) * 12;
-        const x = side * (48 + (row % 2) * 18 + random(id + 18) * 13);
-        const width = 17 + random(id + 65) * 4;
-        houses.push({
-          id,
-          side,
-          x,
-          y: terrainHeight(x, z),
-          z,
-          width,
-          depth: width * 0.86,
-          height: 27 + random(id + 81) * 7,
-          yaw: side * 0.11 + (random(id + 8) - 0.5) * 0.15,
-        });
-      }
-    }
+  const seed = tile * 104729 + 6841;
+  const count = 26 + Math.floor(random(seed + 5) * 11);
+  const clusters = 3 + Math.floor(random(seed + 9) * 3);
+  const centres = Array.from({ length: clusters }, (_, index) =>
+    -(index + 0.35 + random(seed + index * 11) * 0.3) * WORLD_TILE_LENGTH / clusters);
+  for (let attempt = 0; houses.length < count && attempt < 1600; attempt++) {
+    const r = (offset: number) => random(seed + attempt * 37 + offset);
+    const first = houses.length === 0;
+    const cluster = Math.floor(r(3) * centres.length);
+    const z = first ? -35 - r(8) * 35 : r(17) < 0.69
+      ? centres[cluster] + (r(19) - 0.5) * (180 + r(21) * 180)
+      : -65 - r(22) * (WORLD_TILE_LENGTH - 130);
+    if (z > -28 || z < -WORLD_TILE_LENGTH + 28 || (tile < 0 && z < -2100)) continue;
+    const globalZ = z - tile * WORLD_TILE_LENGTH;
+    const side = (first && tile === 0 ? 1 : r(4) < 0.5 ? -1 : 1) as -1 | 1;
+    const offset = side * (first && tile === 0 ? 55 + r(7) * 20 :
+      43 + Math.pow(r(7), 0.9) * (valleyWidth(globalZ) - 75));
+    const x = valleyCenter(globalZ) + offset;
+    const width = 15 + r(31) * 10;
+    const depth = width * (0.76 + r(32) * 0.23);
+    const radius = Math.hypot(width / 2 + 1.5, depth / 2 + 1.5);
+    if (houses.some((house) => Math.hypot(house.x - x, house.z - z) <
+      radius + Math.hypot(house.width / 2 + 1.5, house.depth / 2 + 1.5) + 7)) continue;
+    houses.push({
+      id: houses.length, side, x, y: terrainHeight(x, globalZ), z, width, depth,
+      height: 23 + r(33) * 13,
+      yaw: -side * 1.1 - valleyHeading(globalZ) + (r(34) - 0.5) * 1.35,
+    });
   }
+  layouts.set(tile, houses);
   return houses;
-})();
+}
+
+/** Kept as the entrance chunk's layout for embedding consumers. */
+export const HOUSE_LAYOUT = housesForTile(0);
 
 export interface DeliveryTarget extends Omit<HousePlacement, "id"> {
   id: string;
@@ -64,7 +76,7 @@ export const DELIVERY_TARGETS: readonly DeliveryTarget[] = (() => {
     tile <= Math.ceil(ROUTE_LENGTH / WORLD_TILE_LENGTH);
     tile++
   ) {
-    for (const house of HOUSE_LAYOUT) {
+    for (const house of housesForTile(tile)) {
       const z = house.z - tile * WORLD_TILE_LENGTH;
       const distance = LAUNCH_APPROACH - z;
       if (distance < 0 || distance > ROUTE_LENGTH) continue;

@@ -164,7 +164,7 @@ function local(point: Vec3, collider: Collider): Vec3 {
   return [collider.c * x - collider.s * z, point[1] - collider.target.y, collider.s * x + collider.c * z];
 }
 /** This is the sculpted snow surface used by createCottage in architecture.ts. */
-function roofHeight(x: number, z: number, house: DeliveryTarget): number {
+export function cottageRoofHeight(x: number, z: number, house: DeliveryTarget): number {
   const eave = house.width / 2 + 1.45;
   const round = 1.25;
   const normalized = (Math.sqrt(x * x + round * round) - round) /
@@ -200,12 +200,12 @@ function roofContact(position: Vec3, velocity: Vec3, wind: Wind, dt: number, col
     return null;
   const sample = (t: number) => {
     const point = local(integrate(position, velocity, wind, t).position, collider);
-    const dx = (roofHeight(point[0] + 0.05, point[2], house) - roofHeight(point[0] - 0.05, point[2], house)) / 0.1;
-    const dz = (roofHeight(point[0], point[2] + 0.05, house) - roofHeight(point[0], point[2] - 0.05, house)) / 0.1;
+    const dx = (cottageRoofHeight(point[0] + 0.05, point[2], house) - cottageRoofHeight(point[0] - 0.05, point[2], house)) / 0.1;
+    const dz = (cottageRoofHeight(point[0], point[2] + 0.05, house) - cottageRoofHeight(point[0], point[2] - 0.05, house)) / 0.1;
     const normal: Vec3 = [-dx, 1, -dz];
     const length = Math.hypot(...normal);
     return { point, normal: normal.map((v) => v / length) as Vec3,
-      clearance: point[1] - roofHeight(point[0], point[2], house) - PACKAGE_RADIUS * length };
+      clearance: point[1] - cottageRoofHeight(point[0], point[2], house) - PACKAGE_RADIUS * length };
   };
   let time = Math.max(0, enter) * dt;
   const previous = sample(time);

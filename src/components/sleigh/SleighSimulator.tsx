@@ -14,15 +14,17 @@ import {
   startFlight,
   stepFlight,
   ROUTE_LENGTH,
+  FLIGHT_CEILING,
   type FlightInput,
   type FlightState,
 } from "./flight";
 import { SleighScene } from "./scene";
 import { createDelivery, predictThrow, stepDelivery, throwPackage, type ThrowPrediction } from "./delivery";
-import { chargePower, createAim, keyboardAim, makeThrowSource, pointerAim, smoothAim, dragAim } from "./aim";
+import { chargePower, createAim, keyboardAim, makeThrowSource, pointerAim, smoothAim, dragAim, worldThrowAim } from "./aim";
 import { DELIVERY_TARGET_COUNT } from "./houses";
 import { getEnvironment, type TimeMode, type WeatherMode } from "./environment";
-import { ROUTE_STOPS, routeStopAt } from "./route";
+import { terrainHeight, valleyCenter } from "./terrain";
+import { LAUNCH_APPROACH, ROUTE_STOPS, routeStopAt } from "./route";
 import { SleighAudio } from "./audio";
 import { Icon, JuliusPortrait } from "./icons";
 import "./sleigh.css";
@@ -301,7 +303,10 @@ export default function SleighSimulator({
         boost: k.has("shift") || t.boost,
         brake: k.has(" ") || t.brake,
       };
-      const next = stepFlight(state, input, dt);
+      const currentWeather = getEnvironment(state.elapsed, optionsRef.current);
+      const next = stepFlight(state, input, dt, {
+        x: currentWeather.windX, z: currentWeather.windZ,
+      });
       stateRef.current = next;
       const environment = getEnvironment(next.elapsed, optionsRef.current);
       const wind = { x: environment.windX, z: environment.windZ };
@@ -317,7 +322,7 @@ export default function SleighSimulator({
         aimRef.current = smoothAim(aimRef.current, aimTargetRef.current, dt);
         if (throwQueueRef.current !== null) {
           deliveryRef.current = throwPackage(deliveryRef.current, makeThrowSource(next, state, dt),
-            { ...aimRef.current, power: throwQueueRef.current });
+            worldThrowAim({ ...aimRef.current, power: throwQueueRef.current }, next.yaw));
           throwQueueRef.current = null;
         }
       }
@@ -325,7 +330,7 @@ export default function SleighSimulator({
         ? Math.min(1, Math.max(0, (next.elapsed - chargeRef.current.started) / 0.85)) : 0;
       const activeAim = { ...aimRef.current, power: 36 + charge * 22 };
       if (next.phase === "flying") {
-        predictionRef.current = predictThrow(makeThrowSource(next, state, dt), activeAim, wind);
+        predictionRef.current = predictThrow(makeThrowSource(next, state, dt), worldThrowAim(activeAim, next.yaw), wind);
       } else predictionRef.current = null;
       const landing = deliveryRef.current.lastLanding;
       if (landing && landing.packageId !== previousDelivery.lastLanding?.packageId) {
@@ -335,7 +340,9 @@ export default function SleighSimulator({
           : landing.points > 0 ? "Huset har allerede fått et bedre kast. Prøv et nytt hus!" : "Pakken landet for langt unna. Prøv å bremse og sikt igjen.");
       }
       if (next.lives < state.lives) {
-        setNotice(next.altitude <= 26 ? "Litt høyere! Pass på tretoppene." : "Hold deg inne i dalen!");
+        setNotice(state.altitude - terrainHeight(state.x, LAUNCH_APPROACH - state.distance) < 10
+          ? "Hold høyden over snøen! Trekk rolig opp."
+          : "Følg svingen i dalen. Motstyr rolig for å endre kurs.");
       }
       const settling = deliveryRef.current.packages.some((parcel) => !parcel.landed);
       if (next.phase === "complete" && !settling && !completionReported.current) {
@@ -504,6 +511,11 @@ export default function SleighSimulator({
   const routePercent = Math.min(100, (flight.distance / ROUTE_LENGTH) * 100);
   const environment = getEnvironment(flight.elapsed, { timeMode, weatherMode });
   const routeStop = routeStopAt(flight.distance);
+  const courseDelta = Math.atan2(
+    valleyCenter(LAUNCH_APPROACH - flight.distance - 180) - flight.x, 180,
+  ) - flight.yaw;
+  const courseCue = courseDelta > 0.14 ? "Dalen svinger mot høyre →"
+    : courseDelta < -0.14 ? "← Dalen svinger mot venstre" : "Følg dalens svinger";
   const routeKm = (ROUTE_LENGTH / 1000).toLocaleString("nb-NO", {
     maximumFractionDigits: 1,
   });
@@ -670,7 +682,7 @@ export default function SleighSimulator({
               {routeStop.distance === 0 ? "Over tretoppene" : routeStop.name}
             </h2>
             <span className="sl-flight-sub">
-              {delivery.deliveries} av {DELIVERY_TARGET_COUNT} hus har fått gaver · Brems for et sikrere kast
+              {courseCue} · Brems for et sikrere kast
             </span>
           </div>
           <div className="sl-flight-status">
@@ -860,12 +872,12 @@ export default function SleighSimulator({
               <div className="sl-compass-face">
                 <span>N</span>
                 <i
-                  style={{ transform: `rotate(${flight.heading * 100}deg)` }}
+                  style={{ transform: `rotate(${flight.yaw * 180 / Math.PI}deg)` }}
                 />
                 <small>SNØFALL</small>
               </div>
             </div>
-            <Gauge label="HØYDE" value={flight.altitude} max={180} unit="m" />
+            <Gauge label="HØYDE" value={flight.altitude} max={FLIGHT_CEILING} unit="m" />
           </div>
           <div className="sl-cockpit-right">
             <div className="sl-route-label">
@@ -1053,12 +1065,17 @@ export default function SleighSimulator({
                   Innenfor 10 meter får huset en gave og merket blir grønt.
                   Bare det beste kastet til hvert hus teller.
                 </p>
+                <p>
+                  A/D lener sleden inn i svingen. Slipp for å rette opp krengningen;
+                  motstyr for å endre kurs tilbake. Fart, vind og tyngde påvirker flyturen.
+                  Hold god høyde over terreng og hustak.
+                </p>
                 <div className="sl-controls-list">
                   <div>
                     <span>
                       <kbd>W A S D</kbd> / <kbd>↑ ← ↓ →</kbd>
                     </span>
-                    <span>Styr og endre høyde</span>
+                    <span>Sving med krengning og endre stigning</span>
                   </div>
                   <div>
                     <kbd>MUS</kbd> / <kbd>I J K L</kbd>

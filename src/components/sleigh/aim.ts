@@ -69,49 +69,54 @@ export function chargePower(heldSeconds: number): number {
   return 36 + 22 * clamp(finite(heldSeconds) / 0.85, 0, 1);
 }
 
+/** Convert the camera-relative throwing angle to the sleigh's world heading. */
+export function worldThrowAim(aim: Aim, yaw: number): Aim {
+  const angle = finite(aim.yaw) + finite(yaw);
+  return {
+    yaw: Math.atan2(Math.sin(angle), Math.cos(angle)),
+    elevation: finite(aim.elevation, -0.25),
+    power: finite(aim.power, 36),
+  };
+}
+
 /** Use physical flight coordinates so recycling the scenery cannot move a throw. */
 export function makeThrowSource(
   current: FlightState,
   previous: FlightState | null,
   dt: number,
 ): ThrowSource {
-  let lateral = 0;
-  let vertical = 0;
+  const yaw = finite(current.yaw);
+  const sin = Math.sin(yaw), cos = Math.cos(yaw);
+  const speed = Math.max(0, finite(current.speed)) / 3.6;
+  const fallback: ThrowSource["velocity"] = [sin * speed, 0, -cos * speed];
+  let velocity: ThrowSource["velocity"] = current.phase === "flying" ? fallback : [0, 0, 0];
+  const validVelocity = current.velocity?.length === 3 && current.velocity.every(Number.isFinite);
   if (
     previous &&
     current.phase === "flying" &&
     previous.phase === "flying" &&
     current.lives === previous.lives &&
-    Number.isFinite(dt) &&
-    dt > 0 &&
+    Number.isFinite(dt) && dt > 0 && dt <= 0.1 + 1e-9 &&
     current.distance >= previous.distance &&
-    current.distance - previous.distance <=
-      (Math.max(finite(current.speed), finite(previous.speed), 0) / 3.6) * dt +
-        1e-6
+    current.elapsed >= previous.elapsed &&
+    validVelocity
   ) {
-    const dx = (current.x - previous.x) / dt;
-    const dy = (current.altitude - previous.altitude) / dt;
-    // Larger jumps cannot come from the flight controls; they are respawns/replays.
-    if (
-      Number.isFinite(dx) &&
-      Number.isFinite(dy) &&
-      Math.abs(dx) <= 60 + 1e-6 &&
-      Math.abs(dy) <= 32 + 1e-6
-    ) {
-      lateral = dx;
-      vertical = dy;
-    }
+    const previousSpeed = previous.velocity?.every(Number.isFinite)
+      ? Math.hypot(...previous.velocity) : Math.max(0, finite(previous.speed)) / 3.6;
+    const travel = Math.hypot(current.x - previous.x,
+      current.altitude - previous.altitude, current.distance - previous.distance);
+    const plausibleTravel = Math.max(Math.hypot(...current.velocity), previousSpeed, speed) * dt + 0.5;
+    // Explicit physics velocity carries momentum without deriving teleport speeds
+    // from position differences. Discontinuous frames still use a safe launch trim.
+    if (Number.isFinite(travel) && travel <= plausibleTravel)
+      velocity = [...current.velocity];
   }
   return {
     position: [
-      finite(current.x) + 1.2,
+      finite(current.x) + cos * 1.2 + sin * 1.7,
       finite(current.altitude) + 3.1,
-      LAUNCH_APPROACH - finite(current.distance) - 1.7,
+      LAUNCH_APPROACH - finite(current.distance) + sin * 1.2 - cos * 1.7,
     ],
-    velocity: [
-      lateral,
-      vertical,
-      current.phase === "flying" ? -finite(current.speed) / 3.6 : 0,
-    ],
+    velocity,
   };
 }

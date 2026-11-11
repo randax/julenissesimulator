@@ -8,9 +8,11 @@ import {
   pointerAim,
   smoothAim,
   dragAim,
+  worldThrowAim,
 } from "./aim.ts";
-import { createFlight, startFlight, stepFlight } from "./flight.ts";
+import { createFlight, startFlight } from "./flight.ts";
 import { LAUNCH_APPROACH } from "./route.ts";
+import { createDelivery, throwPackage } from "./delivery.ts";
 
 const near = (actual: number, expected: number) =>
   assert.ok(
@@ -62,60 +64,69 @@ test("holding a throw increases power up to a finite maximum", () => {
     assert.equal(chargePower(duration), 36);
 });
 
-test("throws inherit actual forward, lateral and climbing carrier velocity", () => {
+test("throws inherit explicit world velocity and originate from the rotated helper seat", () => {
   const previous = startFlight(createFlight());
-  const current = stepFlight(
-    previous,
-    { steer: 1, climb: 1, boost: true, brake: false },
-    0.1,
-  );
-  const source = makeThrowSource(current, previous, 0.1);
-  near(source.velocity[0], 60);
-  near(source.velocity[1], 32);
-  near(source.velocity[2], -current.speed / 3.6);
-  assert.deepEqual(source.position, [
-    current.x + 1.2,
-    current.altitude + 3.1,
-    LAUNCH_APPROACH - current.distance - 1.7,
-  ]);
-  const late = { ...current, distance: 9600 };
-  assert.equal(
-    makeThrowSource(late, null, 0.1).position[2],
-    LAUNCH_APPROACH - 9600 - 1.7,
-  );
+  const current = {
+    ...previous, yaw: 0.55, velocity: [26, 8, -61] as [number, number, number],
+    x: previous.x + 1.2, altitude: previous.altitude + 0.4, distance: 3.1, elapsed: 0.05,
+    speed: Math.hypot(26, 61) * 3.6,
+  };
+  const source = makeThrowSource(current, previous, 0.05);
+  assert.deepEqual(source.velocity, current.velocity);
+  assert.notEqual(source.velocity, current.velocity, "the source must not alias mutable velocity storage");
+  near(source.position[0], current.x + Math.cos(current.yaw) * 1.2 + Math.sin(current.yaw) * 1.7);
+  near(source.position[1], current.altitude + 3.1);
+  near(source.position[2], LAUNCH_APPROACH - current.distance + Math.sin(current.yaw) * 1.2 - Math.cos(current.yaw) * 1.7);
+  const late = { ...current, distance: 9600, yaw: 0 };
+  near(makeThrowSource(late, null, 0.1).position[2], LAUNCH_APPROACH - 9600 - 1.7);
 });
 
-test("respawns, replays, phase changes and invalid timing never impart teleport velocity", () => {
-  const previous = { ...startFlight(createFlight()), distance: 500 };
-  const moved = { ...previous, x: 3, altitude: 36, distance: 505 };
+test("respawns, replays, phase changes and invalid timing suppress lateral and vertical momentum", () => {
+  const previous = {
+    ...startFlight(createFlight()), distance: 500, elapsed: 10, yaw: 0.4,
+    velocity: [20, 2, -46] as [number, number, number],
+  };
+  const moved = {
+    ...previous, x: 3, altitude: 36, distance: 505, elapsed: 10.1,
+    velocity: [25, 10, -45] as [number, number, number],
+  };
+  const safeVelocity = [Math.sin(moved.yaw) * moved.speed / 3.6, 0, -Math.cos(moved.yaw) * moved.speed / 3.6];
   const cases = [
     { ...moved, lives: 2 },
     { ...moved, distance: 0 },
     { ...moved, distance: 10000 },
     { ...moved, x: 100 },
     { ...moved, altitude: 100 },
+    { ...moved, elapsed: 0 },
+    { ...moved, velocity: [Number.NaN, 0, -50] as [number, number, number] },
   ];
   for (const current of cases) {
     const source = makeThrowSource(current, previous, 0.1);
-    assert.deepEqual(source.velocity.slice(0, 2), [0, 0]);
-    near(source.velocity[2], -current.speed / 3.6);
+    source.velocity.forEach((value, index) => near(value, safeVelocity[index]));
   }
-  for (const dt of [0, -1, Number.NaN, Infinity])
-    assert.deepEqual(
-      makeThrowSource(moved, previous, dt).velocity.slice(0, 2),
-      [0, 0],
-    );
-  assert.deepEqual(
-    makeThrowSource({ ...moved, phase: "paused" }, previous, 0.1).velocity,
-    [0, 0, 0],
-  );
-  assert.deepEqual(
-    makeThrowSource(moved, { ...previous, phase: "ready" }, 0.1).velocity.slice(
-      0,
-      2,
-    ),
-    [0, 0],
-  );
+  for (const dt of [0, -1, Number.NaN, Infinity, 50]) {
+    makeThrowSource(moved, previous, dt).velocity.forEach((value, index) => near(value, safeVelocity[index]));
+  }
+  assert.deepEqual(makeThrowSource({ ...moved, phase: "paused" }, previous, 0.1).velocity, [0, 0, 0]);
+  makeThrowSource(moved, { ...previous, phase: "ready" }, 0.1).velocity.forEach((value, index) => near(value, safeVelocity[index]));
+});
+
+test("a forward throw follows the actual sleigh heading while retaining world momentum", () => {
+  const aim = { yaw: 0, elevation: 0, power: 36 };
+  const source = { position: [0, 35, 0] as [number, number, number], velocity: [10, 2, -45] as [number, number, number] };
+  const turned = worldThrowAim(aim, Math.PI / 2);
+  const parcel = throwPackage(createDelivery(), source, turned).packages[0];
+  near(parcel.velocity[0], 46);
+  near(parcel.velocity[1], 2);
+  near(parcel.velocity[2], -45);
+  near(worldThrowAim({ ...aim, yaw: -0.4 }, 0.7).yaw, 0.3);
+  for (const yaw of [-100, -Math.PI, 0, Math.PI, 100, Number.NaN, Infinity]) {
+    const result = worldThrowAim(aim, yaw);
+    assert.ok(result.yaw >= -Math.PI && result.yaw <= Math.PI);
+    assert.equal(result.elevation, aim.elevation);
+    assert.equal(result.power, aim.power);
+  }
+  assert.deepEqual(aim, { yaw: 0, elevation: 0, power: 36 });
 });
 
 
